@@ -1,0 +1,27 @@
+{
+    "title":  "Nimiq Wallet",
+    "wallet": {
+        "title": "Wallet",
+        "summary": {
+            "title": "Summary"
+        },
+        "send": {
+            "title": "Send"
+        },
+        "receive": {
+            "title": "Receive"
+        },
+        "transactions": {
+            "title": "Transactions"
+        },
+        "settings": {
+            "title": "Settings"
+        }
+    },
+    "settings": {
+        "title": "Settings"
+    },
+    "loading": {
+        "syncing": "Syncing Blocks"
+    }
+}
