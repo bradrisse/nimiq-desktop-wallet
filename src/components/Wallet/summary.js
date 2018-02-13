@@ -9,6 +9,7 @@ import Avatar from 'material-ui/Avatar';
 import ReceivingIcon from 'material-ui-icons/FileDownload';
 import SendingIcon from 'material-ui-icons/FileUpload';
 import TransactionModal from '../Transactions/transactionModal';
+import Empty from '../Empty';
 
 const styles = theme => ({
     card: {
@@ -51,7 +52,7 @@ class Summary extends React.Component {
             <div>
                 <Card className={classes.card}>
                     <CardContent>
-                        <Typography className={classes.title}>{nimiq.selectedWallet.address}</Typography>
+                        <Typography className={classes.title}>{nimiq.selectedWallet.name}</Typography>
                         <Typography variant="headline" component="h2">
                             {nimiq.selectedWallet.balance} NIM
                         </Typography>
@@ -60,9 +61,7 @@ class Summary extends React.Component {
                         </Typography>
                     </CardContent>
                 </Card>
-                {nimiq.selectedWallet.transactions.length <= 0 && <Typography component="p">
-                    No recent transactions
-                </Typography>}
+                {nimiq.selectedWallet.transactions.length <= 0 && <Empty message="transactions.emptyRecent" subtract={288}/>}
 
                 {nimiq.selectedWallet.transactions.length > 0 && <List>
                     {nimiq.selectedWallet.transactions.map((transaction, index) => (

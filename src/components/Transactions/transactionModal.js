@@ -7,6 +7,7 @@ import Button from 'material-ui/Button';
 import Grid from 'material-ui/Grid';
 import Toolbar from 'material-ui/Toolbar';
 import AppBar from 'material-ui/AppBar';
+import { translate } from 'react-i18next';
 
 const styles = theme => ({
     button: {
@@ -67,32 +68,50 @@ class TransactionModal extends React.Component {
                                             </Toolbar>
                                         </AppBar>
                                         <div className={classes.root}>
-                                            <Typography variant="title" id="modal-title">
+                                            <Typography variant="title">
                                                 To
                                             </Typography>
-                                            <Typography variant="subheading" id="simple-modal-description">
+                                            <Typography variant="subheading">
                                                 {transaction.recipient}
                                             </Typography>
-                                            <Typography variant="title" id="modal-title">
+                                            <Typography variant="title">
                                                 From
                                             </Typography>
-                                            <Typography variant="subheading" id="simple-modal-description">
+                                            <Typography variant="subheading">
                                                 {transaction.sender}
                                             </Typography>
                                             <Grid container>
                                                 <Grid item xs={6}>
-                                                    <Typography variant="title" id="modal-title">
+                                                    <Typography variant="title">
                                                         Amount
+                                                    </Typography>
+                                                    <Typography variant="subheading">
+                                                        {transaction.value}
                                                     </Typography>
                                                 </Grid>
                                                 <Grid item xs={6}>
-                                                    <Typography variant="title" id="modal-title">
+                                                    <Typography variant="title">
                                                         Fees
+                                                    </Typography>
+                                                    <Typography variant="subheading">
+                                                        {transaction.fee}
                                                     </Typography>
                                                 </Grid>
                                             </Grid>
+                                            <Typography variant="title">
+                                                Note
+                                            </Typography>
+                                            <Typography variant="subheading">
+                                                {transaction.data}
+                                            </Typography>
+                                            <Typography variant="title">
+                                                Timestamp
+                                            </Typography>
+                                            <Typography variant="subheading">
+                                                {transaction.timestamp}
+                                            </Typography>
                                             <Button variant="raised" color="primary" className={classes.button} onClick={this.handleClose}>
-                                                Send
+                                                Close
                                             </Button>
                                         </div>
                                     </div>}

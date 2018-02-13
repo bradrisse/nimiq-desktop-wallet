@@ -5,6 +5,7 @@ import List, { ListItem, ListItemIcon, ListItemText } from 'material-ui/List';
 import Divider from 'material-ui/Divider';
 import SeetingsIcon from 'material-ui-icons/Settings';
 import WalletIcon from 'material-ui-icons/AccountBalanceWallet';
+import MiningIcon from 'material-ui-icons/Memory';
 import { translate } from 'react-i18next';
 
 
@@ -26,6 +27,12 @@ function SimpleList(props) {
                         <WalletIcon />
                     </ListItemIcon>
                     <ListItemText primary={t('wallet.title')} />
+                </ListItem>
+                <ListItem button>
+                    <ListItemIcon>
+                        <MiningIcon />
+                    </ListItemIcon>
+                    <ListItemText primary={t('mining.title')} />
                 </ListItem>
                 <ListItem button>
                     <ListItemIcon>

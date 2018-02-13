@@ -18,6 +18,17 @@
             "title": "Settings"
         }
     },
+    "mining": {
+        "title": "Mining"
+    },
+    "transactions": {
+        "title": "Transaction",
+        "empty": "No Transactions",
+        "emptyRecent": "No Recent Transactions",
+        "infoModal": {
+            "title": "Transaction Info"
+        }
+    },
     "settings": {
         "title": "Settings"
     },

@@ -10,6 +10,8 @@ import { translate } from 'react-i18next';
 import Summary from './summary';
 import Send from './send';
 import Settings from './settings';
+import Paper from 'material-ui/Paper';
+import FullHeight from '../FullHeight';
 
 import SummaryIcon from 'material-ui-icons/Assessment';
 import SendIcon from 'material-ui-icons/FileUpload';
@@ -53,25 +55,29 @@ class SimpleTabs extends React.Component {
 
         return (
             <div className={classes.root}>
-                <Grid container>
+                <Grid container spacing={0}>
                     <Grid item xs={3}>
                         <WalletList />
                     </Grid>
                     <Grid item xs={9}>
-                        <AppBar position="static">
-                            <Tabs value={value} onChange={this.handleChange} fullWidth>
-                                <Tab icon={<SummaryIcon />} label={t('wallet.summary.title')} />
-                                <Tab icon={<SendIcon />} label={t('wallet.send.title')} />
-                                <Tab icon={<ReceiveIcon />} label={t('wallet.receive.title')} />
-                                <Tab icon={<TransactionsIcon />} label={t('wallet.transactions.title')} />
-                                <Tab icon={<SettingsIcon />} label={t('wallet.settings.title')} />
-                            </Tabs>
-                        </AppBar>
-                        {value === 0 && <TabContainer><Summary/></TabContainer>}
-                        {value === 1 && <TabContainer><Send /></TabContainer>}
-                        {value === 2 && <TabContainer>Receive</TabContainer>}
-                        {value === 3 && <TabContainer>Transactions</TabContainer>}
-                        {value === 4 && <TabContainer><Settings /></TabContainer>}
+                        <FullHeight>
+                            <Paper style={{height: '100%'}}>
+                                <AppBar position="static">
+                                    <Tabs value={value} onChange={this.handleChange} fullWidth>
+                                        <Tab icon={<SummaryIcon />} label={t('wallet.summary.title')} />
+                                        <Tab icon={<SendIcon />} label={t('wallet.send.title')} />
+                                        <Tab icon={<ReceiveIcon />} label={t('wallet.receive.title')} />
+                                        <Tab icon={<TransactionsIcon />} label={t('wallet.transactions.title')} />
+                                        <Tab icon={<SettingsIcon />} label={t('wallet.settings.title')} />
+                                    </Tabs>
+                                </AppBar>
+                                {value === 0 && <TabContainer><Summary/></TabContainer>}
+                                {value === 1 && <TabContainer><Send /></TabContainer>}
+                                {value === 2 && <TabContainer>Receive</TabContainer>}
+                                {value === 3 && <TabContainer>Transactions</TabContainer>}
+                                {value === 4 && <TabContainer><Settings /></TabContainer>}
+                            </Paper>
+                        </FullHeight>
                     </Grid>
                 </Grid>
             </div>

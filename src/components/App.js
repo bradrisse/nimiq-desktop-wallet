@@ -405,6 +405,7 @@ class App extends React.Component {
                                             fee: Nimiq.Policy.satoshisToCoins(transaction.fee),
                                             data: Nimiq.BufferUtils.toHex(transaction.data),
                                             blockHeight: block.height,
+                                            hash: transaction.hash().toHex(),
                                             timestamp: block.timestamp
                                         })
                                     }

@@ -41,6 +41,11 @@ export default {
                 minWidth: 130
             }
         },
+        MuiTabIndicator: {
+            colorSecondary: {
+                backgroundColor: '#F6AE2D'
+            }
+        },
         MuiButton: {
             raisedPrimary: {
                 backgroundColor: '#F6AE2D',

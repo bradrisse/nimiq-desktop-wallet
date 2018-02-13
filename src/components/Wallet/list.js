@@ -15,6 +15,9 @@ const styles = theme => ({
         maxWidth: 360,
         backgroundColor: theme.palette.background.paper,
     },
+    active: {
+        background: '#d3d3d3'
+    }
 });
 
 class WalletList extends React.Component {
@@ -30,7 +33,7 @@ class WalletList extends React.Component {
                 <FullHeight scroll>
                     <List>
                         {nimiq.wallets.map((wallet, index) => (
-                            <ListItem button key={index} onClick={() => {this.selectWallet(wallet)}}>
+                            <ListItem button key={index} onClick={() => {this.selectWallet(wallet)}} className={wallet.address === nimiq.selectedWallet.address ? classes.active : ''}>
                                 <Avatar style={{background: 'none'}}><Iqon address={wallet.address}/></Avatar>
                                 <ListItemText primary={wallet.name ? wallet.name : `Wallet ${index + 1}`} secondary={`${wallet.balance} NIM`} />
                             </ListItem>
