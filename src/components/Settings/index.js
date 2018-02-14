@@ -42,19 +42,19 @@ class Settings extends React.Component {
                         >
                             <MenuItem value={'en'}>English</MenuItem>
                             <MenuItem value={'es'}>Español (Spanish)</MenuItem>
-                            <MenuItem value={'de'}>Deutsche (German)</MenuItem>
-                            <MenuItem value={'hans'}>中文 (Chinese)</MenuItem>
-                            <MenuItem value={'ja'}>日本語 (Japanese)</MenuItem>
+                            {/*<MenuItem value={'de'}>Deutsche (German)</MenuItem>*/}
+                            {/*<MenuItem value={'hans'}>中文 (Chinese)</MenuItem>*/}
+                            {/*<MenuItem value={'ja'}>日本語 (Japanese)</MenuItem>*/}
                             <MenuItem value={'ru'}>Pусский (Russian)</MenuItem>
-                            <MenuItem value={'fr'}>Français (French)</MenuItem>
-                            <MenuItem value={'sv'}>Svenska (Swedish)</MenuItem>
+                            {/*<MenuItem value={'fr'}>Français (French)</MenuItem>*/}
+                            {/*<MenuItem value={'sv'}>Svenska (Swedish)</MenuItem>*/}
                             <MenuItem value={'nl'}>Nederlands (Dutch)</MenuItem>
-                            <MenuItem value={'vi'}>Tiếng Việt (Vietnamese)</MenuItem>
-                            <MenuItem value={'ti'}>Tagalog (Filipino)</MenuItem>
-                            <MenuItem value={'ko'}>한국어 (Korean)</MenuItem>
-                            <MenuItem value={'it'}>Italiano (Italian)</MenuItem>
+                            {/*<MenuItem value={'vi'}>Tiếng Việt (Vietnamese)</MenuItem>*/}
+                            {/*<MenuItem value={'ti'}>Tagalog (Filipino)</MenuItem>*/}
+                            {/*<MenuItem value={'ko'}>한국어 (Korean)</MenuItem>*/}
+                            {/*<MenuItem value={'it'}>Italiano (Italian)</MenuItem>*/}
                             <MenuItem value={'pt'}>Português (Portuguese)</MenuItem>
-                            <MenuItem value={'id'}>Bahasa indonesia (Indonesian)</MenuItem>
+                            {/*<MenuItem value={'id'}>Bahasa indonesia (Indonesian)</MenuItem>*/}
                         </Select>
                 </FormControl>
             </div>
