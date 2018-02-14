@@ -125,6 +125,7 @@ class Mining extends React.Component {
                                 <Typography variant="headline" component="h2">
                                     5 hr 10 min 29 sec
                                 </Typography>
+                                <Typography className={classes.pos}>Since: 22 February 2018</Typography>
                             </CardContent>
                         </Card>
                     </Grid>
