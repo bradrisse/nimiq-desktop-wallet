@@ -1,0 +1,55 @@
+{
+    "header": {
+        "title":  "Carteira Nimiq",
+        "status": "Estado",
+        "connected": "Conectado",
+        "notConnected": "Desconectado"
+    },
+    "wallet": {
+        "title": "Carteira",
+        "summary": {
+            "title": "Resumo"
+        },
+        "send": {
+            "title": "Enviar"
+        },
+        "receive": {
+            "title": "Receber"
+        },
+        "transactions": {
+            "title": "Transações"
+        },
+        "settings": {
+            "title": "Configurações"
+        }
+    },
+    "mining": {
+        "title": "Minerando",
+        "toggle": "Habilitar mineração",
+        "hashRate": "Taxa de Hash",
+        "global": "Global",
+        "average": "média",
+        "nodes": "Nós",
+        "clients": "Clientes",
+        "last30": "Últimos 30 dias",
+        "lastBlockTime": "Último Tempo por Bloco",
+        "totalBlocksMined": "Total de Blocos Minerados",
+        "estimatedBlocks": "Estimativa de Blocos",
+        "upTime": "Tempo em atividade"
+    },
+    "transactions": {
+        "title": "Transação",
+        "empty": "Sem Transações",
+        "emptyRecent": "Sem Transações Recentes",
+        "infoModal": {
+            "title": "Informações sobre transação"
+        }
+    },
+    "settings": {
+        "title": "Configurações",
+        "language": "Idioma"
+    },
+    "loading": {
+        "syncing": "Sincronizando Blocos"
+    }
+}
