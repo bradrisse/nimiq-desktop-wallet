@@ -9,6 +9,7 @@ i18n
     .use(reactI18nextModule)
     .init({
         fallbackLng: {
+            'nl-NL': ['nl'],
             'en-US': ['en'],
             'fr-FR': ['fr'],
             default: ['en'],
