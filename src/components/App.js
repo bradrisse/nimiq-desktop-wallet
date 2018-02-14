@@ -78,6 +78,7 @@ class App extends React.Component {
         this._updateBalance();
 
         $.blockchain.on("head-changed", this._updateBalance);
+        this.props.nimiqActions.updateBlockHeight($.blockchain.height);
         nimiqActions.updateBlockReward(window.Nimiq.Policy.blockRewardAt($.blockchain.height));
 
         // $.miner.startWork();
