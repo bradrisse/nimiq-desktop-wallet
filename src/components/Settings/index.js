@@ -48,6 +48,13 @@ class Settings extends React.Component {
                             <MenuItem value={'ru'}>Pусский (Russian)</MenuItem>
                             <MenuItem value={'fr'}>Français (French)</MenuItem>
                             <MenuItem value={'sv'}>Svenska (Swedish)</MenuItem>
+                            <MenuItem value={'nl'}>Nederlands (Dutch)</MenuItem>
+                            <MenuItem value={'vi'}>Tiếng Việt (Vietnamese)</MenuItem>
+                            <MenuItem value={'ti'}>Tagalog (Filipino)</MenuItem>
+                            <MenuItem value={'ko'}>한국어 (Korean)</MenuItem>
+                            <MenuItem value={'it'}>Italiano (Italian)</MenuItem>
+                            <MenuItem value={'pt'}>Português (Portuguese)</MenuItem>
+                            <MenuItem value={'id'}>Bahasa indonesia (Indonesian)</MenuItem>
                         </Select>
                 </FormControl>
             </div>
