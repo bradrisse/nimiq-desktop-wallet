@@ -1,0 +1,55 @@
+{
+    "header": {
+        "title":  "Nimiq Portefeuille",
+        "status": "Status",
+        "connected": "Verbonden",
+        "notConnected": "Niet verbonden"
+    },
+    "wallet": {
+        "title": "Portefeuille",
+        "summary": {
+            "title": "Samenvatting"
+        },
+        "send": {
+            "title": "Verstuur"
+        },
+        "receive": {
+            "title": "Ontvang"
+        },
+        "transactions": {
+            "title": "Transacties"
+        },
+        "settings": {
+            "title": "Instellingen"
+        }
+    },
+    "mining": {
+        "title": "Mining",
+        "toggle": "Toggle Mining",
+        "hashRate": "Hash Snelheid",
+        "global": "Globaal",
+        "average": "gemiddelde",
+        "nodes": "Nodes",
+        "clients": "Clients",
+        "last30": "Laatste 30 Dagen",
+        "lastBlockTime": "Laatste Blok Tijd",
+        "totalBlocksMined": "Totale Blokken Gemined",
+        "estimatedBlocks": "Geschatte Blokken",
+        "upTime": "Tijd Online"
+    },
+    "transactions": {
+        "title": "Transactie",
+        "empty": "Geen Transacties",
+        "emptyRecent": "Geen Recente Transacties
+        "infoModal": {
+            "title": "Transactie Info"
+        }
+    },
+    "settings": {
+        "title": "Instellingen",
+        "language": "Taal"
+    },
+    "loading": {
+        "syncing": "Blokken Synchroniseren"
+    }
+}
