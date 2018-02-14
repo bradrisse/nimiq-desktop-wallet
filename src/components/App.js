@@ -242,6 +242,7 @@ class App extends React.Component {
     }
 
     _addWallet() {
+        console.log('_addWallet >>>')
         let wallet;
         Nimiq.Wallet.generate()
             .then(wlt => {
@@ -252,8 +253,7 @@ class App extends React.Component {
             .then(() => $.walletStore.list())
             .then(walletAddresses => {
                 if (walletAddresses.length === 1) {
-                    // the newly created wallet is the only one, make it the default
-                    return this.$.walletStore.setDefault(wallet.address);
+                    return this.$.walletStore.setDefault(walletAddresses[0]);
                 }
                 return Promise.resolve();
             })
@@ -459,7 +459,9 @@ class App extends React.Component {
                     $.walletStore.hasDefault().then(hasDefault => {
                         console.log('hasDefault ', hasDefault)
                         if (hasDefault) {
-                            this.$.walletStore.getDefault().then(defaultWallet => {
+                            $.walletStore.getDefault().then(defaultWallet => {
+                                console.log('defaultWallet ', defaultWallet)
+                                this.addAccount(defaultWallet.address)
                                 //this._setAddress(defaultWallet.address);
                                 //this.$addressInput.setAttribute('placeholder', defaultWallet.address.toUserFriendlyAddress());
                             });
