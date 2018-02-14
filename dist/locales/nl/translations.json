@@ -40,7 +40,7 @@
     "transactions": {
         "title": "Transactie",
         "empty": "Geen Transacties",
-        "emptyRecent": "Geen Recente Transacties
+        "emptyRecent": "Geen Recente Transacties",
         "infoModal": {
             "title": "Transactie Info"
         }
