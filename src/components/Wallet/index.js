@@ -11,6 +11,7 @@ import Summary from './summary';
 import Send from './send';
 import Settings from './settings';
 import Receive from './receive';
+import Transactions from '../Transactions';
 import Paper from 'material-ui/Paper';
 import FullHeight from '../FullHeight';
 
@@ -75,7 +76,7 @@ class SimpleTabs extends React.Component {
                                 {value === 0 && <TabContainer><Summary/></TabContainer>}
                                 {value === 1 && <TabContainer><Send /></TabContainer>}
                                 {value === 2 && <TabContainer><Receive /></TabContainer>}
-                                {value === 3 && <TabContainer>Transactions</TabContainer>}
+                                {value === 3 && <TabContainer><Transactions /></TabContainer>}
                                 {value === 4 && <TabContainer><Settings /></TabContainer>}
                             </Paper>
                         </FullHeight>
