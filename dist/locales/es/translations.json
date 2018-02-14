@@ -1,5 +1,38 @@
 {
     "title":  "Nimiq Billetera",
-    "wallet": "Billetera",
-    "settings": "Ajustes"
+    "wallet": {
+        "title": "Billetera",
+        "summary": {
+            "title": "Resumen"
+        },
+        "send": {
+            "title": "Send"
+        },
+        "receive": {
+            "title": "Enviar"
+        },
+        "transactions": {
+            "title": "Actas"
+        },
+        "settings": {
+            "title": "Ajustes"
+        }
+    },
+    "mining": {
+        "title": "Minería"
+    },
+    "transactions": {
+        "title": "Transacción",
+        "empty": "Sin transacciones",
+        "emptyRecent": "Sin transacciones recientes",
+        "infoModal": {
+            "title": "Información de transacción"
+        }
+    },
+    "settings": {
+        "title": "Ajustes"
+    },
+    "loading": {
+        "syncing": "Sincronización de bloques"
+    }
 }

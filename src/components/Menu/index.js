@@ -7,6 +7,7 @@ import SeetingsIcon from 'material-ui-icons/Settings';
 import WalletIcon from 'material-ui-icons/AccountBalanceWallet';
 import MiningIcon from 'material-ui-icons/Memory';
 import { translate } from 'react-i18next';
+import { Link } from "react-router-dom";
 
 
 const styles = theme => ({
@@ -15,6 +16,9 @@ const styles = theme => ({
         maxWidth: 360,
         backgroundColor: theme.palette.background.paper,
     },
+    link: {
+        textDecoration: 'none'
+    }
 });
 
 function SimpleList(props) {
@@ -22,24 +26,30 @@ function SimpleList(props) {
     return (
         <div className={classes.root}>
             <List component="nav">
-                <ListItem button>
-                    <ListItemIcon>
-                        <WalletIcon />
-                    </ListItemIcon>
-                    <ListItemText primary={t('wallet.title')} />
-                </ListItem>
-                <ListItem button>
-                    <ListItemIcon>
-                        <MiningIcon />
-                    </ListItemIcon>
-                    <ListItemText primary={t('mining.title')} />
-                </ListItem>
-                <ListItem button>
-                    <ListItemIcon>
-                        <SeetingsIcon />
-                    </ListItemIcon>
-                    <ListItemText primary={t('settings.title')} />
-                </ListItem>
+                <Link to="/" className={classes.link}>
+                    <ListItem button>
+                        <ListItemIcon>
+                            <WalletIcon />
+                        </ListItemIcon>
+                        <ListItemText primary={t('wallet.title')} />
+                    </ListItem>
+                </Link>
+                <Link to="/mining" className={classes.link}>
+                    <ListItem button>
+                        <ListItemIcon>
+                            <MiningIcon />
+                        </ListItemIcon>
+                        <ListItemText primary={t('mining.title')} />
+                    </ListItem>
+                </Link>
+                <Link to="/settings" className={classes.link}>
+                    <ListItem button>
+                        <ListItemIcon>
+                            <SeetingsIcon />
+                        </ListItemIcon>
+                        <ListItemText primary={t('settings.title')} />
+                    </ListItem>
+                </Link>
             </List>
             <Divider />
         </div>

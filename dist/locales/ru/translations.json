@@ -1,0 +1,38 @@
+{
+    "title":  "Nimiq Бумажник",
+    "wallet": {
+        "title": "Бумажник",
+        "summary": {
+            "title": "Резюме"
+        },
+        "send": {
+            "title": "Послать"
+        },
+        "receive": {
+            "title": "Получать"
+        },
+        "transactions": {
+            "title": "Oперации"
+        },
+        "settings": {
+            "title": "Hастройки"
+        }
+    },
+    "mining": {
+        "title": "Добыча"
+    },
+    "transactions": {
+        "title": "Сделка",
+        "empty": "Нет транзакций",
+        "emptyRecent": "Нет новых транзакций",
+        "infoModal": {
+            "title": "Информация о транзакции"
+        }
+    },
+    "settings": {
+        "title": "настройки"
+    },
+    "loading": {
+        "syncing": "Синхронизация блоков"
+    }
+}

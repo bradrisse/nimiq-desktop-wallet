@@ -469,7 +469,7 @@ class App extends React.Component {
                     });
 
                     $.consensus.on("established", () => this._onConsensusEstablished());
-                    $.consensus.on("lost", () => console.error("Consensus lost"));
+                    $.consensus.on("lost", () => this.props.nimiqActions.updateConsensus(false));
                     // $.consensus.on("sync-chain-proof", () => this._updateSyncProgress("sync-chain-proof"));
                     // $.consensus.on("verify-chain-proof", () => this._updateSyncProgress("verify-chain-proof"));
                     // $.consensus.on("sync-accounts-tree", () => this._updateSyncProgress("sync-accounts-tree"));

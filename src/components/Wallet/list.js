@@ -31,7 +31,7 @@ class WalletList extends React.Component {
         return (
             <div className={classes.root}>
                 <FullHeight scroll>
-                    <List>
+                    <List style={{paddingTop: 0}}>
                         {nimiq.wallets.map((wallet, index) => (
                             <ListItem button key={index} onClick={() => {this.selectWallet(wallet)}} className={wallet.address === nimiq.selectedWallet.address ? classes.active : ''}>
                                 <Avatar style={{background: 'none'}}><Iqon address={wallet.address}/></Avatar>

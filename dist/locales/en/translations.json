@@ -30,7 +30,8 @@
         }
     },
     "settings": {
-        "title": "Settings"
+        "title": "Settings",
+        "language": "Language"
     },
     "loading": {
         "syncing": "Syncing Blocks"

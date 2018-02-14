@@ -54,6 +54,7 @@
     "react-i18next": "^7.3.6",
     "react-localize-redux": "^2.15.1",
     "react-redux": "^5.0.6",
+    "react-router-dom": "^4.2.2",
     "redux": "^3.7.2",
     "redux-form": "^7.2.3"
   }
