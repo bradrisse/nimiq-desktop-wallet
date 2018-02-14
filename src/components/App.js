@@ -253,6 +253,7 @@ class App extends React.Component {
             .then(() => $.walletStore.list())
             .then(walletAddresses => {
                 if (walletAddresses.length === 1) {
+                    this.setAddresses(walletAddresses)
                     return $.walletStore.setDefault(walletAddresses[0]);
                 }
                 return Promise.resolve();
