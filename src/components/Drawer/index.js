@@ -17,7 +17,7 @@ import Mining from '../Mining';
 import Settings from '../Settings';
 import { translate } from 'react-i18next';
 import {connect} from "react-redux";
-import { BrowserRouter as Router, Route } from "react-router-dom";
+import { BrowserRouter as Router, Route, Switch, Redirect } from "react-router-dom";
 
 const drawerWidth = 240;
 
@@ -139,11 +139,11 @@ class MiniDrawer extends React.Component {
                                         </svg>
                                     </div>
                                     <Typography variant="title" color="inherit" noWrap style={{marginLeft: 15, float: 'left', lineHeight: '40px'}}>
-                                        {t('title')}
+                                        {t('header.title')}
                                     </Typography>
                                 </div>
                                 <Typography variant="caption" color="inherit" style={{marginRight: 15}}>
-                                    Status: {nimiq.isConsensusEstablished ? 'Connected' : 'Not Connected'} @ #{nimiq.blockHeight}
+                                    {t('header.status')}: {nimiq.isConsensusEstablished ? t('header.connected') : t('header.notConnected')} @ #{nimiq.blockHeight}
                                 </Typography>
                             </Toolbar>
                         </AppBar>
@@ -165,9 +165,12 @@ class MiniDrawer extends React.Component {
                                 </div>
                             </Drawer>
                             <main className={classes.content}>
-                                <Route exact path="/" component={Wallet} />
-                                <Route exact path="/mining" component={Mining} />
-                                <Route exact path="/settings" component={Settings} />
+                                <Switch>
+                                    <Route exact path="/" component={Wallet} />
+                                    <Route exact path="/mining" component={Mining} />
+                                    <Route exact path="/settings" component={Settings} />
+                                    <Redirect from='*' to='/' />
+                                </Switch>
                             </main>
                     </div>
                 </Router>

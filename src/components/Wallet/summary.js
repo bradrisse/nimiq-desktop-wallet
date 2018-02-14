@@ -24,19 +24,20 @@ class Summary extends React.Component {
 
         return (
             <div>
-                <Card className={classes.card}>
-                    <CardContent>
-                        <Typography className={classes.title}>{nimiq.selectedWallet.name}</Typography>
-                        <Typography variant="headline" component="h2">
-                            {nimiq.selectedWallet.balance} NIM
-                        </Typography>
-                        <Typography component="p">
-                            Number of transactions: {nimiq.selectedWallet.transactions.length}
-                        </Typography>
-                    </CardContent>
-                </Card>
-                <Transactions />
-
+                {nimiq.selectedWallet && <div>
+                    <Card className={classes.card}>
+                        <CardContent>
+                            <Typography className={classes.title}>{nimiq.selectedWallet.name}</Typography>
+                            <Typography variant="headline" component="h2">
+                                {nimiq.selectedWallet.balance} NIM
+                            </Typography>
+                            <Typography component="p">
+                                Number of transactions: {nimiq.selectedWallet.transactions.length}
+                            </Typography>
+                        </CardContent>
+                    </Card>
+                    <Transactions />
+                </div>}
             </div>
         );
     }

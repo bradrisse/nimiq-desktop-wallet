@@ -103,11 +103,11 @@ class App extends React.Component {
     _onHeadChanged = () => {
         const height = $.blockchain.height;
         console.log('head changed ', height)
-        // const globalHashRate = this._getGlobalHashrate();
-        // this.props.nimiqActions.updateHashRate({
-        //     hashRate: this._setHashrate($.miner.hashrate),
-        //     globalHashRate: globalHashRate
-        // });
+        const globalHashRate = this._getGlobalHashrate();
+        this.props.nimiqActions.updateHashRate({
+            hashRate: this._setHashrate($.miner.hashrate),
+            globalHashRate: globalHashRate
+        });
         this.props.nimiqActions.updateBlockHeight(height);
     };
 
@@ -238,6 +238,7 @@ class App extends React.Component {
 
     addAccount(address) {
         console.log('addAccount ', address)
+        $.miner = new Nimiq.Miner($.blockchain, $.accounts, $.mempool, $.network.time, address);
     }
 
     _addWallet() {
@@ -447,7 +448,6 @@ class App extends React.Component {
                     $.network = $.consensus.network;
 
                     $.accounts = $.blockchain.accounts;
-                    $.miner = new Nimiq.Miner($.blockchain, $.accounts, $.mempool, $.network.time, null);
 
                     $.walletStore = promiseResults[1];
                     $.network.connect();

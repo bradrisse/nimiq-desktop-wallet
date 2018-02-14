@@ -31,13 +31,14 @@ class Settings extends React.Component {
         const { nimiq, classes, t } = this.props;
 
         return (
-            <div>
+            <div style={{padding: 30}}>
                 <FormControl className={classes.formControl}>
-                    <InputLabel htmlFor="age-simple">t('settings.language')</InputLabel>
+                    <InputLabel htmlFor="age-simple">{t('settings.language')}</InputLabel>
                         <Select
                             value={this.state.language}
                             onChange={this.handleChange}
                             input={<Input name="language" id="language" />}
+                            style={{width: 300}}
                         >
                             <MenuItem value={'en'}>English</MenuItem>
                             <MenuItem value={'es'}>Español (Spanish)</MenuItem>

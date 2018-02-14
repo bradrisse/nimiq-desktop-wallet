@@ -7,7 +7,7 @@ import SeetingsIcon from 'material-ui-icons/Settings';
 import WalletIcon from 'material-ui-icons/AccountBalanceWallet';
 import MiningIcon from 'material-ui-icons/Memory';
 import { translate } from 'react-i18next';
-import { Link } from "react-router-dom";
+import { Link, withRouter } from "react-router-dom";
 
 
 const styles = theme => ({
@@ -60,4 +60,4 @@ SimpleList.propTypes = {
     classes: PropTypes.object.isRequired,
 };
 
-export default withStyles(styles)(translate('translations')(SimpleList));
+export default withRouter(withStyles(styles)(translate('translations')(SimpleList)));

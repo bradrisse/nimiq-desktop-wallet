@@ -1,5 +1,10 @@
 {
-    "title":  "Nimiq Wallet",
+    "header": {
+        "title":  "Nimiq Wallet",
+        "status": "Status",
+        "connected": "Connected",
+        "notConnected": "Not Connected"
+    },
     "wallet": {
         "title": "Wallet",
         "summary": {
@@ -19,7 +24,18 @@
         }
     },
     "mining": {
-        "title": "Mining"
+        "title": "Mining",
+        "toggle": "Toggle Mining",
+        "hashRate": "Hash Rate",
+        "global": "Global",
+        "average": "average",
+        "nodes": "Nodes",
+        "clients": "Clients",
+        "last30": "Last 30 Days",
+        "lastBlockTime": "Last Block Time",
+        "totalBlocksMined": "Total Blocks Mined",
+        "estimatedBlocks": "Estimated Blocks",
+        "upTime": "UpTime"
     },
     "transactions": {
         "title": "Transaction",
