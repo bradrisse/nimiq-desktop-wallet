@@ -26,6 +26,7 @@
     "mining": {
         "title": "Mining",
         "toggle": "Toggle Mining",
+        "miningWallet": "Mining Wallet",
         "hashRate": "Hash Rate",
         "global": "Global",
         "average": "average",

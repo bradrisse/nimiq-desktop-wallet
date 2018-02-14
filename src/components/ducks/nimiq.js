@@ -52,7 +52,8 @@ export const initial = {
   showCreateWallet: false,
   showRecoverWallet: false,
   isRunningInAnother: false,
-  selectedWallet: null
+  selectedWallet: null,
+  miningWallet: null
 };
 
 export default function(state = initial, action) {

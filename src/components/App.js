@@ -67,6 +67,10 @@ class App extends React.Component {
                 }
             );
         }
+
+        if (nextProps.nimiq.threadCount !== this.props.nimiq.threadCount) {
+            $.miner.threads = nextProps.nimiq.threadCount
+        }
     }
 
     _onConsensusEstablished() {
@@ -163,10 +167,7 @@ class App extends React.Component {
     };
 
     _onBlockMined = block => {
-        this.setState({
-            soundToPlay: BlockMinedSound,
-            isPlaying: true
-        });
+        console.log('block mined')
     };
 
     _onHashrateChanged() {
@@ -236,18 +237,28 @@ class App extends React.Component {
         }
     };
 
-    addAccount(address) {
-        console.log('addAccount ', address)
+    startMiner = (address) => {
         $.miner = new Nimiq.Miner($.blockchain, $.accounts, $.mempool, $.network.time, address);
+        if (window.localStorage.getItem("threadCount")) {
+            this.props.nimiqActions.updateThreadCount(window.localStorage.getItem("threadCount"));
+        } else {
+            var threadCount = navigator.hardwareConcurrency / 2 || 4;
+            this.props.nimiqActions.updateThreadCount(threadCount);
+            $.miner.threads = threadCount;
+            window.localStorage.setItem("threadCount", JSON.stringify(threadCount));
+        }
+
+        $.miner.on("start", () => this._onMinerStarted());
+        $.miner.on("stop", () => this._onMinerStopped());
+        $.miner.on("block-mined", block => this._onBlockMined(block));
+        $.miner.on("hashrate-changed", () => this._onHashrateChanged());
     }
 
     _addWallet() {
-        console.log('_addWallet >>>')
         let wallet;
         Nimiq.Wallet.generate()
             .then(wlt => {
                 wallet = wlt;
-                console.log('wallet', wallet)
                 return $.walletStore.put(wallet);
             })
             .then(() => $.walletStore.list())
@@ -258,7 +269,7 @@ class App extends React.Component {
                 }
                 return Promise.resolve();
             })
-            .then(() => this.addAccount(wallet.address));
+            .then(() => this.startMiner(wallet.address));
     }
 
   // init() {
@@ -383,7 +394,6 @@ class App extends React.Component {
             var existingWallet = _.find(wallets, (wallet) => {
                 return wallet.address === address.toUserFriendlyAddress()
             })
-            console.log('existingWallet ', existingWallet)
             _addressPromises.push($.accounts.get(address).then((_account) => {
                 var _account = {
                     name: existingWallet ? existingWallet.name : '',
@@ -395,7 +405,6 @@ class App extends React.Component {
                     if (transactions.length > 0) {
                         _.each(transactions, (transaction) => {
                             $.consensus.blockchain.getBlock(transaction.blockHash).then((block) => {
-                                console.log('block ', block)
                                 _.each(block.body.transactions, (transaction) => {
                                     var _recipient = transaction.recipient.toUserFriendlyAddress();
                                     var _sender = transaction.sender.toUserFriendlyAddress();
@@ -460,7 +469,7 @@ class App extends React.Component {
                     $.walletStore.hasDefault().then(hasDefault => {
                         if (hasDefault) {
                             $.walletStore.getDefault().then(defaultWallet => {
-                                this.addAccount(defaultWallet.address)
+                                this.startMiner(defaultWallet.address)
                             });
                         } else {
                             this._addWallet();
