@@ -101,7 +101,9 @@ class Mining extends React.Component {
                                 style={{width: 300}}
                             >
                                 {nimiq.wallets.map((wallet, index) => (
-                                    <MenuItem value={wallet.address} key={index}>{wallet.name}</MenuItem>
+                                    <MenuItem value={wallet.address} key={index}>
+                                        {wallet.name ? wallet.name : `Wallet ${index}`}
+                                    </MenuItem>
                                 ))}
                             </Select>
                         </FormControl>

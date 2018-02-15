@@ -58,6 +58,11 @@ export default {
             root: {
                 zIndex: 1
             }
+        },
+        MuiPopover: {
+            paper: {
+                zIndex: 3
+            }
         }
     }
 }

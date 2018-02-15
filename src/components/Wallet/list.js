@@ -47,7 +47,7 @@ class WalletList extends React.Component {
         const { classes, nimiq, t } = this.props;
         return (
             <div className={classes.root}>
-                <FullHeight scroll subtract={64}>
+                <FullHeight scroll subtract={100}>
                     <List style={{paddingTop: 0}}>
                         {nimiq.wallets.map((wallet, index) => (
                             <ListItem button key={index} onClick={() => {this.selectWallet(wallet)}} className={wallet.address === nimiq.selectedWallet.address ? classes.active : ''}>
@@ -55,9 +55,9 @@ class WalletList extends React.Component {
                                 <ListItemText primary={wallet.name ? wallet.name : `Wallet ${index + 1}`} secondary={`${wallet.balance} NIM`} />
                             </ListItem>
                         ))}
-                        <CreateWallet/>
                     </List>
                 </FullHeight>
+                <CreateWallet/>
             </div>
         );
     }

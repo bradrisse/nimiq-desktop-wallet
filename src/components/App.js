@@ -427,6 +427,7 @@ class App extends React.Component {
                                             fee: Nimiq.Policy.satoshisToCoins(transaction.fee),
                                             data: Nimiq.BufferUtils.toHex(transaction.data),
                                             blockHeight: block.height,
+                                            mined: false,
                                             hash: transaction.hash().toHex(),
                                             timestamp: block.timestamp
                                         })
@@ -496,6 +497,7 @@ class App extends React.Component {
                     // $.consensus.on("sync-finalize", () => this._updateSyncProgress("sync-finalize"));
 
                     $.blockchain.on("head-changed", () => this._onHeadChanged());
+                    $.network.on("peers-changed", () => this._onPeersChanged());
 
                     resolve($);
                 });
