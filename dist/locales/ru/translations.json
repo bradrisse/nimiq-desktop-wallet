@@ -1,38 +1,57 @@
 {
-    "title":  "Nimiq Бумажник",
+    "header": {
+        "title":  "Nimiq Кошелёк",
+        "status": "Состояие",
+        "connected": "Подключен",
+        "notConnected": "Не Подключен"
+    },
     "wallet": {
-        "title": "Бумажник",
+        "title": "Кошелёк",
+        "createWallet": "Создать Кошелёк",
         "summary": {
             "title": "Резюме"
         },
         "send": {
-            "title": "Послать"
+            "title": "Отправить"
         },
         "receive": {
-            "title": "Получать"
+            "title": "Получить"
         },
         "transactions": {
-            "title": "Oперации"
+            "title": "Транзакции"
         },
         "settings": {
-            "title": "Hастройки"
+            "title": "Настройки"
         }
     },
     "mining": {
-        "title": "Добыча"
+        "title": "Добыча",
+        "toggle": "Вкл/Выкл Добычу",
+        "miningWallet": "Кошелёк для Добычи",
+        "hashRate": "Скорость Хэширования",
+        "global": "Глобальная",
+        "average": "Средняя",
+        "nodes": "Точки",
+        "clients": "Клиенты",
+        "last30": "Последние 30 Дней",
+        "lastBlockTime": "Время Последнего Блока",
+        "totalBlocksMined": "Всего Блоков Добыто",
+        "estimatedBlocks": "Планируемые Блоки",
+        "upTime": "Время Работы"
     },
     "transactions": {
-        "title": "Сделка",
-        "empty": "Нет транзакций",
-        "emptyRecent": "Нет новых транзакций",
+        "title": "Транзакция",
+        "empty": "Нет Транзакций",
+        "emptyRecent": "Нет Недавних Транзакций",
         "infoModal": {
-            "title": "Информация о транзакции"
+            "title": "Информация о Транзакции"
         }
     },
     "settings": {
-        "title": "настройки"
+        "title": "Настройки",
+        "language": "Язык"
     },
     "loading": {
-        "syncing": "Синхронизация блоков"
+        "syncing": "Синхронизация Блоков"
     }
 }
