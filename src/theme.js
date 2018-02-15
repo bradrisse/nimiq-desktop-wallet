@@ -53,6 +53,11 @@ export default {
                     backgroundColor: '#E69E1D'
                 }
             }
+        },
+        MuiBackdrop: {
+            root: {
+                zIndex: 1
+            }
         }
     }
 }

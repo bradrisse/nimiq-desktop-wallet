@@ -7,6 +7,7 @@
     },
     "wallet": {
         "title": "Wallet",
+        "createWallet": "Create Wallet",
         "summary": {
             "title": "Summary"
         },

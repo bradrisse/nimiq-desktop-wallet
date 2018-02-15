@@ -7,8 +7,8 @@ import SeetingsIcon from 'material-ui-icons/Settings';
 import WalletIcon from 'material-ui-icons/AccountBalanceWallet';
 import MiningIcon from 'material-ui-icons/Memory';
 import { translate } from 'react-i18next';
-import { Link, withRouter } from "react-router-dom";
-
+import { Link } from "react-router-dom";
+import { compose } from 'recompose';
 
 const styles = theme => ({
     root: {
@@ -21,7 +21,7 @@ const styles = theme => ({
     }
 });
 
-function SimpleList(props) {
+function Menu(props) {
     const { classes, t } = props;
     return (
         <div className={classes.root}>
@@ -56,8 +56,11 @@ function SimpleList(props) {
     );
 }
 
-SimpleList.propTypes = {
+Menu.propTypes = {
     classes: PropTypes.object.isRequired,
 };
 
-export default withRouter(withStyles(styles)(translate('translations')(SimpleList)));
+export default compose(
+    withStyles(styles),
+    translate('translations')
+)(Menu);

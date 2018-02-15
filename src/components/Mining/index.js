@@ -14,6 +14,7 @@ import Input, { InputLabel } from 'material-ui/Input';
 import Select from 'material-ui/Select';
 import { MenuItem } from 'material-ui/Menu';
 import TextField from 'material-ui/TextField';
+import { compose } from 'recompose';
 
 const styles = theme => ({
     card: {
@@ -220,4 +221,8 @@ function mapPropsToDispatch(dispatch) {
     };
 }
 
-export default connect(mapStateToProps, mapPropsToDispatch)(withStyles(styles)(translate('translations')(Mining)));
+export default compose(
+    connect(mapStateToProps, mapPropsToDispatch),
+    withStyles(styles),
+    translate('translations')
+)(Mining);

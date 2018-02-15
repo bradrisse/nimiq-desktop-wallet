@@ -22,7 +22,8 @@ export const types = {
   TOGGLE_IS_RUNNING_IN_ANOTHER_INSTANCE: "TOGGLE_IS_RUNNING_IN_ANOTHER_INSTANCE",
   SET_WALLETS: "SET_WALLETS",
   SET_WALLET_NAME: "SET_WALLET_NAME",
-  SET_SELECTED_WALLET: "SET_SELECTED_WALLET"
+  SET_SELECTED_WALLET: "SET_SELECTED_WALLET",
+  ADD_WALLET: "ADD_WALLET"
 };
 
 export const initial = {
@@ -104,6 +105,10 @@ export default function(state = initial, action) {
           return { ...state, showRecoverWallet: action.payload }
       case `${types.TOGGLE_CREATE_WALLET}`:
           return { ...state, showCreateWallet: action.payload }
+      case `${types.ADD_WALLET}`:
+          var _wallets1 = state.wallets;
+          _wallets1.push(action.payload)
+          return { ...state, wallets: _wallets1, selectedWallet: action.payload  }
       case `${types.SET_WALLET_NAME}`:
           var _wallets = state.wallets;
           var _selectedWallet = state.selectedWallet;
@@ -127,6 +132,10 @@ export default function(state = initial, action) {
 }
 
 export const actions = {
+    addWallet: data => ({
+        type: types.ADD_WALLET,
+        payload: data
+    }),
     setSelectedWallet: data => ({
         type: types.SET_SELECTED_WALLET,
         payload: data

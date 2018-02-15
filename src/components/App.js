@@ -1,5 +1,4 @@
-import '../assets/css/App.css';
-import React, { Component } from 'react';
+import React from 'react';
 import {connect} from "react-redux";
 import {bindActionCreators} from "redux";
 import {actions as nimiqActions} from "./ducks/nimiq";
@@ -7,6 +6,7 @@ import Drawer from './Drawer';
 import Loading from './Loading';
 import FullHeight from './FullHeight';
 import _ from 'lodash';
+import '../assets/css/App.css';
 
 
 const $ = {};
@@ -70,6 +70,16 @@ class App extends React.Component {
 
         if (nextProps.nimiq.threadCount !== this.props.nimiq.threadCount) {
             $.miner.threads = nextProps.nimiq.threadCount
+        }
+
+        if (nextProps.nimiq.isMining !== this.props.nimiq.isMining) {
+            if (nextProps.nimiq.isMining) {
+                $.miner.startWork();
+            }
+
+            if (!nextProps.nimiq.isMining) {
+                $.miner.stopWork();
+            }
         }
     }
 
@@ -445,6 +455,7 @@ class App extends React.Component {
         let self = this;
         return new Promise(resolve => {
             Nimiq.init(() => {
+                window.$ = $;
                 $.clientType = this.clientType;
                 Promise.all([
                     Nimiq.Consensus['full'](),

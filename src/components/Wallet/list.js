@@ -8,6 +8,9 @@ import {bindActionCreators} from "redux";
 import {actions as nimiqActions} from "../ducks/nimiq";
 import Iqon from '../iqon';
 import FullHeight from '../FullHeight';
+import { translate } from 'react-i18next';
+import CreateWallet from './create';
+import { compose } from 'recompose';
 
 const styles = theme => ({
     root: {
@@ -26,11 +29,25 @@ class WalletList extends React.Component {
         this.props.nimiqActions.setSelectedWallet(wallet)
     }
 
+    addWallet = () => {
+        window.Nimiq.Wallet.generate().then(wlt => {
+            window.$.walletStore.put(wlt);
+            console.log('wlt ', wlt)
+            var _newWallet = {
+                name: '',
+                address: wlt.address.toUserFriendlyAddress(),
+                balance: 0,
+                transactions: []
+            }
+            this.props.nimiqActions.addWallet(_newWallet)
+        })
+    }
+
     render() {
-        const { classes, nimiq } = this.props;
+        const { classes, nimiq, t } = this.props;
         return (
             <div className={classes.root}>
-                <FullHeight scroll>
+                <FullHeight scroll subtract={64}>
                     <List style={{paddingTop: 0}}>
                         {nimiq.wallets.map((wallet, index) => (
                             <ListItem button key={index} onClick={() => {this.selectWallet(wallet)}} className={wallet.address === nimiq.selectedWallet.address ? classes.active : ''}>
@@ -38,9 +55,7 @@ class WalletList extends React.Component {
                                 <ListItemText primary={wallet.name ? wallet.name : `Wallet ${index + 1}`} secondary={`${wallet.balance} NIM`} />
                             </ListItem>
                         ))}
-                        <ListItem button>
-                            <ListItemText primary="Add Wallet" />
-                        </ListItem>
+                        <CreateWallet/>
                     </List>
                 </FullHeight>
             </div>
@@ -64,4 +79,8 @@ function mapPropsToDispatch(dispatch) {
     };
 }
 
-export default connect(mapStateToProps, mapPropsToDispatch)(withStyles(styles)(WalletList));
+export default compose(
+    connect(mapStateToProps, mapPropsToDispatch),
+    withStyles(styles),
+    translate('translations')
+)(WalletList);

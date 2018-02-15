@@ -14,6 +14,7 @@ import Receive from './receive';
 import Transactions from '../Transactions';
 import Paper from 'material-ui/Paper';
 import FullHeight from '../FullHeight';
+import { compose } from 'recompose';
 
 import SummaryIcon from 'material-ui-icons/Assessment';
 import SendIcon from 'material-ui-icons/FileUpload';
@@ -38,12 +39,11 @@ const styles = theme => ({
     root: {
         flexGrow: 1,
         height: '100%',
-        //marginTop: theme.spacing.unit * 3,
         backgroundColor: theme.palette.background.paper,
     },
 });
 
-class SimpleTabs extends React.Component {
+class Wallet extends React.Component {
     state = {
         value: 0,
     };
@@ -88,8 +88,11 @@ class SimpleTabs extends React.Component {
     }
 }
 
-SimpleTabs.propTypes = {
+Wallet.propTypes = {
     classes: PropTypes.object.isRequired,
 };
 
-export default withStyles(styles)(translate('translations')(SimpleTabs));
+export default compose(
+    withStyles(styles),
+    translate('translations')
+)(Wallet);

@@ -18,6 +18,7 @@ import Settings from '../Settings';
 import { translate } from 'react-i18next';
 import {connect} from "react-redux";
 import { BrowserRouter as Router, Route, Switch, Redirect } from "react-router-dom";
+import { compose } from 'recompose';
 
 const drawerWidth = 240;
 
@@ -190,4 +191,8 @@ function mapStateToProps(state) {
     };
 }
 
-export default connect(mapStateToProps)(withStyles(styles, { withTheme: true })(translate('translations')(MiniDrawer)));
+export default compose(
+    connect(mapStateToProps),
+    withStyles(styles, { withTheme: true }),
+    translate('translations')
+)(MiniDrawer);
