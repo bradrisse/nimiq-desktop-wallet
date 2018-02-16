@@ -54,6 +54,17 @@ class Settings extends Component {
         localStorage.setItem('wallets', JSON.stringify(wallets))
     }
 
+    removeWallet = () => {
+        const {nimiq} = this.props;
+        window.$.walletStore.list().then(addresses => {
+            _.each(addresses, (address) => {
+                if (address.toUserFriendlyAddress() === nimiq.selectedWallet.address) {
+                    window.$.walletStore.remove(address);
+                }
+            })
+        });
+    }
+
     render() {
         const { classes, nimiq } = this.props;
         return (
@@ -71,7 +82,7 @@ class Settings extends Component {
                     onChange={(e) => {this.onNameChange(e.target.value, nimiq.selectedWallet.address)}}
                 />
 
-                <Button variant="raised" color="primary" className={classes.button} onClick={this.handleOpen}>
+                <Button variant="raised" color="primary" className={classes.button} onClick={this.removeWallet}>
                     Delete Wallet
                 </Button>
 
