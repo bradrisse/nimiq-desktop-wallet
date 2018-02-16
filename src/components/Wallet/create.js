@@ -189,7 +189,7 @@ class CreateWallet extends React.Component {
 
         return (
             <div>
-                <Button onClick={this.handleOpen} style={{width: '100%', background: '#042146', color: 'white'}}>Create Wallet</Button>
+                <Button onClick={this.handleOpen} style={{width: '100%', background: '#5648A0', color: 'white'}}>Create Wallet</Button>
                 <Modal
                     aria-labelledby="simple-modal-title"
                     aria-describedby="simple-modal-description"

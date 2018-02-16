@@ -33,13 +33,18 @@ export default {
     overrides: {
         MuiAppBar: {
             colorPrimary: {
-                backgroundColor: '#042146'
+                backgroundColor: '#5648A0'
             }
         },
         MuiTab: {
             rootInherit: {
                 minWidth: 130
             }
+        },
+        MuiPaper: {
+          root: {
+              backgroundColor: '#E7E5EF'
+          }
         },
         MuiTabIndicator: {
             colorSecondary: {

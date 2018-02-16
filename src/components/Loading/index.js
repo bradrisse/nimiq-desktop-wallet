@@ -9,7 +9,7 @@ import { compose } from 'recompose';
 
 const styles = theme => ({
     background: {
-        background: '#042146'
+        // background: 'linear-gradient(#3523ae,#1c0446) fixed'
     },
     message: {
         color: 'white'

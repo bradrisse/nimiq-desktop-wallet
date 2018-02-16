@@ -16,7 +16,7 @@ const styles = theme => ({
     root: {
         width: '100%',
         maxWidth: 360,
-        backgroundColor: theme.palette.background.paper,
+        backgroundColor: '#E7E5EF',
     },
     active: {
         background: '#d3d3d3'
