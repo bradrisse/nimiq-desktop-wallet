@@ -23,7 +23,8 @@ export const types = {
   SET_WALLETS: "SET_WALLETS",
   SET_WALLET_NAME: "SET_WALLET_NAME",
   SET_SELECTED_WALLET: "SET_SELECTED_WALLET",
-  ADD_WALLET: "ADD_WALLET"
+  ADD_WALLET: "ADD_WALLET",
+  REMOVE_WALLET: "REMOVE_WALLET"
 };
 
 export const initial = {
@@ -109,6 +110,21 @@ export default function(state = initial, action) {
           var _wallets1 = state.wallets;
           _wallets1.push(action.payload)
           return { ...state, wallets: _wallets1, selectedWallet: action.payload  }
+      case `${types.REMOVE_WALLET}`:
+          var _wallets2 = state.wallets;
+          var existingWallet = _.findIndex(_wallets2, (wallet) => {
+              return wallet.address === action.payload
+          })
+          console.log('_wallets2 ', _wallets2, existingWallet)
+          if (existingWallet >= 0) {
+              _wallets2.splice(existingWallet, 1)
+          }
+          console.log('_wallets2 ', _wallets2)
+          var _selectedW = ((existingWallet - 1) > 0 ? (existingWallet - 1) : 0 );
+          if (_wallets2.length <= 0) {
+              _selectedW = null;
+          }
+          return { ...state, wallets: _wallets2, selectedWallet: _selectedW }
       case `${types.SET_WALLET_NAME}`:
           var _wallets = state.wallets;
           var _selectedWallet = state.selectedWallet;
@@ -132,6 +148,10 @@ export default function(state = initial, action) {
 }
 
 export const actions = {
+    removeWallet: data => ({
+        type: types.REMOVE_WALLET,
+        payload: data
+    }),
     addWallet: data => ({
         type: types.ADD_WALLET,
         payload: data

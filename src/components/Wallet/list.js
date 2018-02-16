@@ -45,6 +45,7 @@ class WalletList extends React.Component {
 
     render() {
         const { classes, nimiq, t } = this.props;
+        console.log('nimiq.wallets ', nimiq.wallets.length)
         return (
             <div className={classes.root}>
                 <FullHeight scroll subtract={100}>

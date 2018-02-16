@@ -31,9 +31,9 @@ class Transactions extends React.Component {
 
         return (
             <div>
-                {nimiq.selectedWallet.transactions.length <= 0 && <Empty message="transactions.emptyRecent" subtract={288}/>}
+                {nimiq.selectedWallet && nimiq.selectedWallet.transactions.length <= 0 && <Empty message="transactions.emptyRecent" subtract={288}/>}
 
-                {nimiq.selectedWallet.transactions.length > 0 && <List>
+                {nimiq.selectedWallet && nimiq.selectedWallet.transactions.length > 0 && <List>
                     {nimiq.selectedWallet.transactions.map((transaction, index) => (
                         <ListItem key={index} onClick={() => {this.viewTransaction(transaction)}} button>
                             <Avatar>

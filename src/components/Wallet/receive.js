@@ -17,8 +17,8 @@ class Receive extends React.Component {
         const { nimiq, classes } = this.props;
         return (
             <div>
-                <Typography component="p">{nimiq.selectedWallet.address}</Typography>
-                <QRCode value={nimiq.selectedWallet.address} />
+                <Typography component="p">{nimiq.selectedWallet ? nimiq.selectedWallet.address : ''}</Typography>
+                <QRCode value={nimiq.selectedWallet ? nimiq.selectedWallet.address : ''} />
             </div>
         );
     }

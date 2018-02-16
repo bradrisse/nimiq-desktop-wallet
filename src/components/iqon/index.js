@@ -3,13 +3,22 @@ import {Iqons} from './iqons.min.js';
 
 class Iqon extends React.Component {
 
+    componentWillReceiveProps(nextProps) {
+        if (nextProps.address !== this.props.address) {
+            this.renderIqon()
+        }
+    }
+
     componentDidMount() {
+        this.renderIqon()
+    }
+
+    renderIqon = () => {
         const {address} = this.props
         Iqons.render(address, this.iqon);
     }
 
     render() {
-
         return (
             <div ref={e => {
                 this.iqon = e;
