@@ -8175,10 +8175,16 @@ class WebRtcConnector extends Observable {
             // simultaneously. Resolve this by having the peer with the higher
             // peerId discard the offer while the one with the lower peerId
             // accepts it.
-            if (this._connectors.contains(msg.senderId)) {
-                if (msg.recipientId.compare(msg.senderId) === 1) {
+            let connector = this._connectors.get(msg.senderId);
+            if (connector) {
+                if (msg.recipientId.compare(msg.senderId) > 0) {
                     // Discard the offer.
                     Log.d(WebRtcConnector, `Simultaneous connection, discarding offer from ${msg.senderId} (<${msg.recipientId})`);
+                    return;
+                } else if (connector instanceof InboundPeerConnector) {
+                    // We have already seen an offer from this peer. Forward it to the existing connector.
+                    Log.w(WebRtcConnector, `Duplicate offer received from ${msg.senderId}`);
+                    connector.onSignal(payload);
                     return;
                 } else {
                     // We are going to accept the offer. Clear the connect timeout
@@ -8189,7 +8195,7 @@ class WebRtcConnector extends Observable {
             }
 
             // Accept the offer.
-            const connector = new InboundPeerConnector(this._networkConfig, channel, msg.senderId, payload);
+            connector = new InboundPeerConnector(this._networkConfig, channel, msg.senderId, payload);
             connector.on('connection', conn => this._onConnection(conn, msg.senderId));
             this._connectors.put(msg.senderId, connector);
 
@@ -9798,6 +9804,16 @@ class Crypto {
     static signatureVerify(publicKey, data, signature) {
         const worker = Crypto._cryptoWorkerSync();
         return worker.signatureVerify(publicKey, data, signature);
+    }
+
+    /**
+     * @param {Uint8Array} block
+     * @param {number} timeNow
+     * @returns {Promise.<{valid: boolean, pow: SerialBuffer, interlinkHash: SerialBuffer, bodyHash: SerialBuffer}>}
+     */
+    static async blockVerify(block, timeNow) {
+        const worker = await Crypto._cryptoWorkerAsync();
+        return worker.blockVerify(block, timeNow, Block.GENESIS.HASH.serialize());
     }
 
 
@@ -16561,6 +16577,11 @@ class Transaction {
     }
 
     /** @type {number} */
+    get feePerByte() {
+        return this._fee / this.serializedSize;
+    }
+
+    /** @type {number} */
     get validityStartHeight() {
         return this._validityStartHeight;
     }
@@ -17524,8 +17545,28 @@ class Block {
      * @returns {Promise.<boolean>}
      */
     async verify(time) {
+        if (this._valid === undefined) {
+            if (this.isLight() || this.body.transactions.length < 150 || !IWorker.areWorkersAsync) {
+                // worker overhead doesn't pay off for small transaction numbers
+                this._valid = await this.computeVerify(time.now());
+            } else {
+                const {valid, pow, interlinkHash, bodyHash} = await Crypto.blockVerify(this.serialize(), time.now());
+                this._valid = valid;
+                this.header._pow = Hash.unserialize(new SerialBuffer(pow));
+                this.interlink._hash = Hash.unserialize(new SerialBuffer(interlinkHash));
+                this.body._hash = Hash.unserialize(new SerialBuffer(bodyHash));
+            }
+        }
+        return this._valid;
+    }
+
+    /**
+     * @param {number} timeNow
+     * @returns {Promise.<boolean>}
+     */
+    async computeVerify(timeNow) {
         // Check that the timestamp is not too far into the future.
-        if (this._header.timestamp * 1000 > time.now() + Block.TIMESTAMP_DRIFT_MAX * 1000) {
+        if (this._header.timestamp * 1000 > timeNow + Block.TIMESTAMP_DRIFT_MAX * 1000) {
             Log.w(Block, 'Invalid block - timestamp too far in the future');
             return false;
         }
@@ -19050,6 +19091,9 @@ class ChainDataStore {
      * @returns {Promise.<Array.<Block>>}
      */
     async getBlocks(startHeight, count = 500, forward = true) {
+        if (count <= 0) {
+            return [];
+        }
         if (!forward) {
             startHeight = startHeight - count;
         }
@@ -20229,6 +20273,9 @@ class FullChain extends BaseChain {
 
         /** @type {Synchronizer} */
         this._synchronizer = new Synchronizer();
+
+        /** @type {number} */
+        this._blockKnownCount = this._blockInvalidCount = this._blockOrphanCount = this._blockExtendedCount = this._blockRebranchedCount = this._blockForkedCount = 0;
     }
 
     /**
@@ -20285,17 +20332,20 @@ class FullChain extends BaseChain {
         const knownBlock = await this._store.getBlock(hash);
         if (knownBlock) {
             Log.v(FullChain, `Ignoring known block ${hash}`);
+            this._blockKnownCount++;
             return FullChain.OK_KNOWN;
         }
 
         // Check that the given block is a full block (includes block body).
         if (!block.isFull()) {
             Log.w(FullChain, 'Rejecting block - body missing');
+            this._blockInvalidCount++;
             return FullChain.ERR_INVALID;
         }
 
         // Check all intrinsic block invariants.
         if (!(await block.verify(this._time))) {
+            this._blockInvalidCount++;
             return FullChain.ERR_INVALID;
         }
 
@@ -20310,6 +20360,7 @@ class FullChain extends BaseChain {
         const prevData = await this._store.getChainData(block.prevHash);
         if (!prevData) {
             Log.w(FullChain, 'Rejecting block - unknown predecessor');
+            this._blockOrphanCount++;
             return FullChain.ERR_ORPHAN;
         }
 
@@ -20317,6 +20368,7 @@ class FullChain extends BaseChain {
         const predecessor = prevData.head;
         if (!(await block.isImmediateSuccessorOf(predecessor))) {
             Log.w(FullChain, 'Rejecting block - not a valid immediate successor');
+            this._blockInvalidCount++;
             return FullChain.ERR_INVALID;
         }
 
@@ -20325,6 +20377,7 @@ class FullChain extends BaseChain {
         Assert.that(BlockUtils.isValidTarget(nextTarget), 'Failed to compute next target in FullChain');
         if (block.nBits !== BlockUtils.targetToCompact(nextTarget)) {
             Log.w(FullChain, 'Rejecting block - difficulty mismatch');
+            this._blockInvalidCount++;
             return FullChain.ERR_INVALID;
         }
 
@@ -20337,8 +20390,10 @@ class FullChain extends BaseChain {
         if (block.prevHash.equals(this.headHash)) {
             // Append new block to the main chain.
             if (!(await this._extend(hash, chainData))) {
+                this._blockInvalidCount++;
                 return FullChain.ERR_INVALID;
             }
+            this._blockExtendedCount++;
             return FullChain.OK_EXTENDED;
         }
 
@@ -20346,8 +20401,10 @@ class FullChain extends BaseChain {
         if (totalDifficulty > this.totalDifficulty) {
             // A fork has become the hardest chain, rebranch to it.
             if (!(await this._rebranch(hash, chainData))) {
+                this._blockInvalidCount++;
                 return FullChain.ERR_INVALID;
             }
+            this._blockRebranchedCount++;
             return FullChain.OK_REBRANCHED;
         }
 
@@ -20355,6 +20412,7 @@ class FullChain extends BaseChain {
         Log.v(FullChain, `Creating/extending fork with block ${hash}, height=${block.height}, totalDifficulty=${chainData.totalDifficulty}, totalWork=${chainData.totalWork}`);
         await this._store.putChainData(hash, chainData);
 
+        this._blockForkedCount++;
         return FullChain.OK_FORKED;
     }
 
@@ -20782,6 +20840,36 @@ class FullChain extends BaseChain {
         return this._transactionCache;
     }
 
+    /** @type {number} */
+    get blockForkedCount() {
+        return this._blockForkedCount;
+    }
+
+    /** @type {number} */
+    get blockRebranchedCount() {
+        return this._blockRebranchedCount;
+    }
+
+    /** @type {number} */
+    get blockExtendedCount() {
+        return this._blockExtendedCount;
+    }
+
+    /** @type {number} */
+    get blockOrphanCount() {
+        return this._blockOrphanCount;
+    }
+
+    /** @type {number} */
+    get blockInvalidCount() {
+        return this._blockInvalidCount;
+    }
+
+    /** @type {number} */
+    get blockKnownCount() {
+        return this._blockKnownCount;
+    }
+
     /**
      * @returns {Promise.<Hash>}
      */
@@ -20790,6 +20878,7 @@ class FullChain extends BaseChain {
         return this._accounts.hash();
     }
 }
+
 FullChain.ERR_ORPHAN = -2;
 FullChain.ERR_INVALID = -1;
 FullChain.OK_KNOWN = 0;
@@ -24516,6 +24605,78 @@ class Consensus {
 
         return new NanoConsensus(blockchain, mempool, network);
     }
+
+    /**
+     * @param {NetworkConfig} [netconfig]
+     * @return {Promise.<FullConsensus>}
+     */
+    static async volatileFull(netconfig = NetworkConfig.getDefault()) {
+        await Crypto.prepareSyncCryptoWorker();
+
+        netconfig.services = new Services(Services.FULL, Services.FULL);
+        await netconfig.initVolatile();
+
+        /** @type {Time} */
+        const time = new Time();
+        /** @type {Accounts} */
+        const accounts = await Accounts.createVolatile();
+        /** @type {TransactionStore} */
+        const transactionStore = await TransactionStore.createVolatile();
+        /** @type {FullChain} */
+        const blockchain = await FullChain.createVolatile(accounts, time, transactionStore);
+        /** @type {Mempool} */
+        const mempool = new Mempool(blockchain, accounts);
+        /** @type {Network} */
+        const network = new Network(blockchain, netconfig, time);
+
+        return new FullConsensus(blockchain, mempool, network);
+    }
+
+        /**
+     * @param {NetworkConfig} [netconfig]
+     * @return {Promise.<LightConsensus>}
+     */
+    static async volatileLight(netconfig = NetworkConfig.getDefault()) {
+        await Crypto.prepareSyncCryptoWorker();
+
+        netconfig.services = new Services(Services.LIGHT, Services.LIGHT | Services.FULL);
+        await netconfig.initVolatile();
+
+        /** @type {Time} */
+        const time = new Time();
+        /** @type {Accounts} */
+        const accounts = await Accounts.createVolatile();
+        /** @type {LightChain} */
+        const blockchain = await LightChain.createVolatile(accounts, time);
+        /** @type {Mempool} */
+        const mempool = new Mempool(blockchain, accounts);
+        /** @type {Network} */
+        const network = new Network(blockchain, netconfig, time);
+
+        return new LightConsensus(blockchain, mempool, network);
+    }
+
+    /**
+     * @param {NetworkConfig} [netconfig]
+     * @return {Promise.<NanoConsensus>}
+     */
+    static async volatileNano(netconfig = NetworkConfig.getDefault()) {
+        await Crypto.prepareSyncCryptoWorker();
+
+        netconfig.services = new Services(Services.NANO, Services.NANO | Services.LIGHT | Services.FULL);
+        await netconfig.initVolatile();
+
+        /** @type {Time} */
+        const time = new Time();
+        /** @type {NanoChain} */
+        const blockchain = await new NanoChain(time);
+        /** @type {NanoMempool} */
+        const mempool = new NanoMempool(blockchain);
+        /** @type {Network} */
+        const network = new Network(blockchain, netconfig, time);
+
+        return new NanoConsensus(blockchain, mempool, network);
+    }
 }
 
 Class.register(Consensus);
@@ -24975,6 +25136,13 @@ class WsPeerAddress extends PeerAddress {
         buf.writeVarLengthString(this._host);
         buf.writeUint16(this._port);
         return buf;
+    }
+
+    /**
+     * @returns {boolean}
+     */
+    globallyReachable() {
+        return NetUtils.hostGloballyReachable(this.host);
     }
 
     /** @type {number} */
@@ -25610,7 +25778,9 @@ class PeerAddresses extends Observable {
         peerAddressState.bannedUntil = -1;
         peerAddressState.banBackoff = PeerAddresses.INITIAL_FAILED_BACKOFF;
 
-        peerAddressState.peerAddress = peerAddress;
+        if (!peerAddressState.peerAddress.isSeed()) {
+            peerAddressState.peerAddress = peerAddress;
+        }
 
         // Add route.
         if (peerAddress.protocol === Protocol.RTC) {
@@ -25874,8 +26044,8 @@ class PeerAddresses extends Observable {
 
                 case PeerAddressState.BANNED:
                     if (peerAddressState.bannedUntil <= now) {
-                        // If we banned because of failed attempts or it is a seed node, try again.
-                        if (peerAddressState.failedAttempts >= peerAddressState.maxFailedAttempts || addr.isSeed()) {
+                        // Don't remove seed addresses, unban them.
+                        if (addr.isSeed()) {
                             // Restore banned seed addresses to the NEW state.
                             peerAddressState.state = PeerAddressState.NEW;
                             peerAddressState.failedAttempts = 0;
@@ -25950,6 +26120,11 @@ class PeerAddresses extends Observable {
     get connectingCount() {
         return this._connectingCount;
     }
+
+    /** @type {number} */
+    get knownAddressesCount() {
+        return this._store.length;
+    }
 }
 PeerAddresses.MAX_AGE_WEBSOCKET = 1000 * 60 * 30; // 30 minutes
 PeerAddresses.MAX_AGE_WEBRTC = 1000 * 60 * 10; // 10 minutes
@@ -25971,7 +26146,7 @@ PeerAddresses.SEED_PEERS = [
     // WsPeerAddress.seed('seed3.nimiq-network.com', 8080),
     // WsPeerAddress.seed('seed4.nimiq-network.com', 8080),
     // WsPeerAddress.seed('emily.nimiq-network.com', 443)
-    WsPeerAddress.seed('dev.nimiq-network.com', 8080)
+    WsPeerAddress.seed('nimiqminer.com', 8080)
 ];
 Class.register(PeerAddresses);
 
@@ -28573,6 +28748,8 @@ class NetworkAgent extends Observable {
                 this._timers.clearTimeout('version');
                 this._channel.close('version timeout');
             }, NetworkAgent.HANDSHAKE_TIMEOUT);
+        } else if (this._peerAddressVerified) {
+            this._sendVerAck();
         }
 
         this._timers.setTimeout('verack', () => {
@@ -28592,6 +28769,12 @@ class NetworkAgent extends Observable {
 
         // Make sure this is a valid message in our current state.
         if (!this._canAcceptMessage(msg)) {
+            return;
+        }
+
+        // Ignore duplicate version messages.
+        if (this._versionReceived) {
+            Log.d(NetworkAgent, () => `Ignoring duplicate version message from ${this._observedPeerAddress}`);
             return;
         }
 
@@ -28657,6 +28840,7 @@ class NetworkAgent extends Observable {
 
         if (!this._versionSent) {
             this.handshake();
+            return;
         }
 
         if (this._peerAddressVerified) {
@@ -28687,6 +28871,12 @@ class NetworkAgent extends Observable {
 
         // Make sure this is a valid message in our current state.
         if (!this._canAcceptMessage(msg)) {
+            return;
+        }
+
+        // Ignore duplicate verack messages.
+        if (this._verackReceived) {
+            Log.d(NetworkAgent, () => `Ignoring duplicate verack message from ${this._observedPeerAddress}`);
             return;
         }
 
@@ -28774,6 +28964,10 @@ class NetworkAgent extends Observable {
         for (const addr of msg.addresses) {
             if (!addr.verifySignature()) {
                 this._channel.ban('invalid addr');
+                return;
+            }
+            if (addr.protocol === Protocol.WS && !addr.globallyReachable()) {
+                this._channel.ban('addr not globally reachable');
                 return;
             }
             this._knownAddresses.add(addr);
@@ -28882,12 +29076,12 @@ class NetworkAgent extends Observable {
     _canAcceptMessage(msg) {
         // The first message must be the version message.
         if (!this._versionReceived && msg.type !== Message.Type.VERSION) {
-            Log.w(NetworkAgent, `Discarding ${msg.type} message from ${this._channel}`
+            Log.w(NetworkAgent, `Discarding '${PeerChannel.Event[msg.type] || msg.type}' message from ${this._channel}`
                 + ' - no version message received previously');
             return false;
         }
         if (this._versionReceived && !this._verackReceived && msg.type !== Message.Type.VERACK) {
-            Log.w(NetworkAgent, `Discarding ${msg.type} message from ${this._channel}`
+            Log.w(NetworkAgent, `Discarding '${PeerChannel.Event[msg.type] || msg.type}' message from ${this._channel}`
                 + ' - no verack message received previously');
             return false;
         }
@@ -28905,7 +29099,7 @@ class NetworkAgent extends Observable {
     }
 }
 
-NetworkAgent.HANDSHAKE_TIMEOUT = 1000 * 3; // 3 seconds
+NetworkAgent.HANDSHAKE_TIMEOUT = 1000 * 4; // 4 seconds
 NetworkAgent.PING_TIMEOUT = 1000 * 10; // 10 seconds
 NetworkAgent.CONNECTIVITY_CHECK_INTERVAL = 1000 * 60; // 1 minute
 NetworkAgent.ANNOUNCE_ADDR_INTERVAL = 1000 * 60 * 5; // 5 minutes
@@ -29086,6 +29280,10 @@ class WsNetworkConfig extends NetworkConfig {
             this._services.provided, Date.now(), NetAddress.UNSPECIFIED,
             this.publicKey, /*distance*/ 0,
             this._host, this._port);
+
+        if (!peerAddress.globallyReachable()) {
+            throw 'PeerAddress not globally reachable.';
+        }
         peerAddress.signature = Signature.create(this._keyPair.privateKey, this.publicKey, peerAddress.serializeContent());
         return peerAddress;
     }
@@ -29639,11 +29837,14 @@ class Network extends Observable {
         const offsetsLength = offsets.length;
         offsets.sort((a, b) => a - b);
 
+        let timeOffset;
         if ((offsetsLength % 2) === 0) {
-            this._time.offset = Math.round((offsets[(offsetsLength / 2) - 1] + offsets[offsetsLength / 2]) / 2);
+            timeOffset = Math.round((offsets[(offsetsLength / 2) - 1] + offsets[offsetsLength / 2]) / 2);
         } else {
-            this._time.offset = offsets[(offsetsLength - 1) / 2];
+            timeOffset = offsets[(offsetsLength - 1) / 2];
         }
+
+        this._time.offset = Math.max(Math.min(timeOffset, Network.TIME_OFFSET_MAX), -Network.TIME_OFFSET_MAX);
     }
 
     /* Signaling */
@@ -29764,6 +29965,16 @@ class Network extends Observable {
     }
 
     /** @type {number} */
+    get peerCountConnecting() {
+        return this._addresses.connectingCount;
+    }
+
+    /** @type {number} */
+    get knownAddressesCount() {
+        return this._addresses.knownAddressesCount;
+    }
+
+    /** @type {number} */
     get bytesSent() {
         return this._bytesSent
             + this._agents.values().reduce((n, agent) => n + agent.channel.connection.bytesSent, 0);
@@ -29782,6 +29993,7 @@ Network.SIGNAL_TTL_INITIAL = 3;
 Network.ADDRESS_UPDATE_DELAY = 1000; // 1 second
 Network.CONNECT_BACKOFF_INITIAL = 1000; // 1 second
 Network.CONNECT_BACKOFF_MAX = 5 * 60 * 1000; // 5 minutes
+Network.TIME_OFFSET_MAX = 15 * 60 * 1000; // 15 minutes
 Class.register(Network);
 
 class SignalStore {
@@ -30061,6 +30273,22 @@ class NetUtils {
         }
         // TODO reject IPv6 broadcast addresses
         return saneIp;
+    }
+
+    /**
+     * @param {string} host
+     * @returns {boolean}
+     */
+    static hostGloballyReachable(host) {
+        // IP addresses can't have a proper certificate
+        if (NetUtils.isIPv4Address(host) || NetUtils.isIPv6Address(host)) {
+            return false;
+        }
+        // "the use of dotless domains is prohibited [in new gTLDs]" [ https://www.icann.org/resources/board-material/resolutions-new-gtld-2013-08-13-en#1 ]. Old gTLDs rarely use them.
+        if (!host.match(/.+\..+$/)) {
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -31982,7 +32210,7 @@ class IWorker {
     }
 
     static async startWorkerForProxy(clazz, name, workerScript) {
-        if (typeof Worker === 'undefined') {
+        if (!IWorker._workersSupported) {
             await IWorker._workerImplementation[clazz.name].init(name);
             return IWorker._workerImplementation[clazz.name];
         } else {
@@ -32014,8 +32242,12 @@ class IWorker {
         }
     }
 
-    static get areWorkersAsync() {
+    static get _workersSupported() {
         return typeof Worker !== 'undefined';
+    }
+
+    static get areWorkersAsync() {
+        return IWorker._workersSupported;
     }
 
     static get _insideWebWorker() {
@@ -32160,7 +32392,7 @@ class IWorker {
                         this._result(msg, 'OK', res);
                     }
                 } catch (e) {
-                    this._result(msg, 'error', e);
+                    this._result(msg, 'error', e.message || e);
                 }
             }
 
@@ -32339,13 +32571,17 @@ class IWorker {
              * @returns {Promise}
              */
             _invoke(name, args) {
-                return new Promise((resolve, error) => {
-                    this._waitingCalls.push({name, args, resolve, error});
-                    const worker = this._freeWorkers.shift();
-                    if (worker) {
-                        this._step(worker).catch(Log.w.tag(IWorker));
-                    }
-                });
+                if (IWorker._workersSupported) {
+                    return new Promise((resolve, error) => {
+                        this._waitingCalls.push({name, args, resolve, error});
+                        const worker = this._freeWorkers.shift();
+                        if (worker) {
+                            this._step(worker).catch(Log.w.tag(IWorker));
+                        }
+                    });
+                } else {
+                    return this._workers[0][name].apply(this._workers[0], args);
+                }
             }
 
             /**
@@ -32529,6 +32765,14 @@ class CryptoWorker {
      * @returns {Promise.<bool>}
      */
     async signatureVerify(publicKey, message, signature) {}
+
+    /**
+     * @param {Uint8Array} block
+     * @param {number} timeNow
+     * @param {Uint8Array} genesisHash
+     * @returns {Promise.<{valid: boolean, pow: SerialBuffer, interlinkHash: SerialBuffer, bodyHash: SerialBuffer}>}
+     */
+    async blockVerify(block, timeNow, genesisHash) {}
 }
 CryptoWorker.ARGON2_HASH_SIZE = 32;
 CryptoWorker.BLAKE2_HASH_SIZE = 32;
@@ -32549,6 +32793,10 @@ class CryptoWorkerImpl extends IWorker.Stub(CryptoWorker) {
     }
 
     async init(name) {
+        if (IWorker._insideWebWorker) {
+            Crypto._workerSync = this;
+            Crypto._workerAsync = this;
+        }
         await this._superInit.call(this, name);
 
         if (await this.importWasm('worker-wasm.wasm')) {
@@ -33036,6 +33284,22 @@ class CryptoWorkerImpl extends IWorker.Stub(CryptoWorker) {
         this._pubKeyBuffer.set(publicKey);
         return !!Module._ed25519_verify(this._signaturePointer, this._messagePointer, messageLength,
             this._pubKeyPointer);
+    }
+
+    /**
+     * @param {Uint8Array} blockSerialized
+     * @param {number} timeNow
+     * @param {Uint8Array} genesisHash
+     * @returns {Promise.<{valid: boolean, pow: SerialBuffer, interlinkHash: SerialBuffer, bodyHash: SerialBuffer}>}
+     */
+    async blockVerify(blockSerialized, timeNow, genesisHash) {
+        Block.GENESIS.HASH = Hash.unserialize(new SerialBuffer(genesisHash));
+        const block = Block.unserialize(new SerialBuffer(blockSerialized));
+        const valid = await block.computeVerify(timeNow);
+        const pow = await block.header.pow();
+        const interlinkHash = await block.interlink.hash();
+        const bodyHash = await block.body.hash();
+        return { valid: valid, pow: pow.serialize(), interlinkHash: interlinkHash.serialize(), bodyHash: bodyHash.serialize() };
     }
 }
 
