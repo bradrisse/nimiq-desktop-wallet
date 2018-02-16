@@ -64,7 +64,7 @@ class Wallet extends React.Component {
                     </Grid>
                     <Grid item xs={9}>
                         <FullHeight>
-                            <Paper style={{height: '100%'}}>
+                            <Paper style={{height: '100%', background: 'white'}}>
                                 <AppBar position="static">
                                     <Tabs value={value} onChange={this.handleChange} fullWidth>
                                         <Tab icon={<SummaryIcon />} label={t('wallet.summary.title')} />

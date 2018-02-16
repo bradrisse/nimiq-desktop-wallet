@@ -57,6 +57,9 @@ export default {
                 '&:hover': {
                     backgroundColor: '#E69E1D'
                 }
+            },
+            raised: {
+                boxShadow: 'none'
             }
         },
         MuiBackdrop: {

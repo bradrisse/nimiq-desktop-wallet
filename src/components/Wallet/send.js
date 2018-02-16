@@ -8,6 +8,7 @@ import Button from 'material-ui/Button';
 import Grid from 'material-ui/Grid';
 import Toolbar from 'material-ui/Toolbar';
 import AppBar from 'material-ui/AppBar';
+import Centered from '../Centered';
 
 const styles = theme => ({
     button: {
@@ -16,11 +17,19 @@ const styles = theme => ({
     paper: {
         width: theme.spacing.unit * 50,
         backgroundColor: theme.palette.background.paper,
-        boxShadow: theme.shadows[5]
+        boxShadow: theme.shadows[5],
+        zIndex: 3,
+        padding: 25
     },
     root: {
         padding: theme.spacing.unit * 4,
-    }
+    },
+    modal: {
+        zIndex: 3,
+        position: 'relative',
+        minWidth: 300,
+        maxWidth: 450
+    },
 });
 
 
@@ -62,6 +71,16 @@ class Send extends React.Component {
                     fullWidth
                     margin="normal"
                 />
+                <TextField
+                    id="full-width"
+                    label="Fee"
+                    InputLabelProps={{
+                        shrink: true,
+                    }}
+                    placeholder="0.00000"
+                    fullWidth
+                    margin="normal"
+                />
                 <Button variant="raised" color="primary" className={classes.button} onClick={this.handleOpen}>
                     Next
                 </Button>
@@ -71,46 +90,40 @@ class Send extends React.Component {
                     open={this.state.open}
                     onClose={this.handleClose}
                 >
-                    <Grid container style={{ flexGrow: 1, height: "100%", width: "100%", margin: 0 }}>
-                        <Grid item xs={12}>
-                            <Grid container alignItems={"center"} direction={"row"} justify={"center"} style={{ height: "100%" }}>
-                                <Grid item>
-                                    <div className={classes.paper}>
-                                        <AppBar position="static" color="default">
-                                            <Toolbar>
-                                                <Typography variant="title" color="inherit">
-                                                    Confirm Transaction
-                                                </Typography>
-                                            </Toolbar>
-                                        </AppBar>
-                                        <div className={classes.root}>
-                                            <Typography variant="title" id="modal-title">
-                                                To
-                                            </Typography>
-                                            <Typography variant="subheading" id="simple-modal-description">
-                                                Duis mollis, est non commodo luctus, nisi erat porttitor ligula.
-                                            </Typography>
-                                            <Grid container>
-                                                <Grid item xs={6}>
-                                                    <Typography variant="title" id="modal-title">
-                                                        Amount
-                                                    </Typography>
-                                                </Grid>
-                                                <Grid item xs={6}>
-                                                    <Typography variant="title" id="modal-title">
-                                                        Fees
-                                                    </Typography>
-                                                </Grid>
-                                            </Grid>
-                                            <Button variant="raised" color="primary" className={classes.button} onClick={this.handleClose}>
-                                                Send
-                                            </Button>
-                                        </div>
-                                    </div>
+                    <Centered>
+                        <div className={classes.modal}>
+                            <AppBar position="static" color="default">
+                                <Toolbar>
+                                    <Typography variant="title" color="inherit">
+                                        Confirm Transaction
+                                    </Typography>
+                                </Toolbar>
+                            </AppBar>
+                            <div className={classes.paper}>
+                                <Typography variant="title" id="modal-title">
+                                    To
+                                </Typography>
+                                <Typography variant="subheading" id="simple-modal-description">
+                                    Duis mollis, est non commodo luctus, nisi erat porttitor ligula.
+                                </Typography>
+                                <Grid container>
+                                    <Grid item xs={6}>
+                                        <Typography variant="title" id="modal-title">
+                                            Amount
+                                        </Typography>
+                                    </Grid>
+                                    <Grid item xs={6}>
+                                        <Typography variant="title" id="modal-title">
+                                            Fees
+                                        </Typography>
+                                    </Grid>
                                 </Grid>
-                            </Grid>
-                        </Grid>
-                    </Grid>
+                                <Button variant="raised" color="primary" className={classes.button} onClick={this.handleClose}>
+                                    Send
+                                </Button>
+                            </div>
+                        </div>
+                    </Centered>
                 </Modal>
 
             </div>
