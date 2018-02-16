@@ -1,4 +1,7 @@
 import React from 'react';
+import {connect} from "react-redux";
+import {bindActionCreators} from "redux";
+import {actions as nimiqActions} from "../ducks/nimiq";
 import PropTypes from 'prop-types';
 import { withStyles } from 'material-ui/styles';
 import Modal from 'material-ui/Modal';
@@ -16,8 +19,20 @@ import Typography from 'material-ui/Typography';
 import IconButton from 'material-ui/IconButton';
 import CloseIcon from 'material-ui-icons/Close';
 import Checkbox from 'material-ui/Checkbox';
+import Chip from 'material-ui/Chip';
+import Grid from 'material-ui/Grid';
+import _ from 'lodash';
+
 
 var key = 'a18532abfb31ba4e26d64a3ac3430969639aeb5f84b1c4124da0f3e323cdaced';
+
+function shuffle(a) {
+    for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+}
 
 const styles = theme => ({
     modal: {
@@ -41,6 +56,9 @@ const styles = theme => ({
     },
     flex: {
         flex: 1
+    },
+    chip: {
+        margin: theme.spacing.unit,
     }
 });
 
@@ -54,7 +72,12 @@ class CreateWallet extends React.Component {
         },
         showPassword: false,
         step: 0,
-        confirmedSafe: false
+        confirmedSafe: false,
+        walletSeed: null,
+        mnemonicPhrase: null,
+        mnemonicPhraseArray: [],
+        shuffledMnemonic: [],
+        confirmedPhrase: false
     };
 
     handleOpen = () => {
@@ -82,12 +105,87 @@ class CreateWallet extends React.Component {
     nextStep = () => {
         this.setState({
             step: this.state.step += 1
+        }, () => {
+            if (this.state.step === 1) {
+                this.createWallet()
+            }
+        })
+
+    }
+
+    createWallet = () => {
+        window.Nimiq.Wallet.generate().then(wlt => {
+            window.$.walletStore.put(wlt);
+            var _mnemonicPhrase = MnemonicPhrase.keyToMnemonic(wlt.keyPair.publicKey.toHex());
+            var splitPhrase = _mnemonicPhrase.split(' ');
+            var _mnemonicArr = []
+            _.each(splitPhrase, (word, index) => {
+                _mnemonicArr.push({
+                  word: word,
+                  confirmed: false,
+                  num: index
+                })
+            })
+            this.setState({
+                walletSeed: wlt.keyPair.publicKey.toHex(),
+                mnemonicPhrase: _mnemonicPhrase,
+                mnemonicPhraseArray: shuffle(_mnemonicArr)
+            })
+            var _newWallet = {
+                name: this.state.newWallet.name,
+                address: wlt.address.toUserFriendlyAddress(),
+                balance: 0,
+                transactions: []
+            }
+            this.props.nimiqActions.addWallet(_newWallet)
+        })
+    }
+
+    checkOrder = (word) => {
+        var _mnemonicPhraseArray = _.sortBy(this.state.mnemonicPhraseArray, 'num');
+        var lastConfirmed = _.find(_mnemonicPhraseArray, function (x) { return !x.confirmed });
+
+        if (word === lastConfirmed.word) {
+            var _mnemonicPhraseUnshuffled = this.state.mnemonicPhraseArray
+            var existingWordIndex = _.findIndex(_mnemonicPhraseUnshuffled, (obj) => {
+                return word === obj.word
+            })
+            _mnemonicPhraseUnshuffled[existingWordIndex].confirmed = true;
+            this.setState({
+                mnemonicPhraseArray: _mnemonicPhraseUnshuffled
+            })
+        }
+
+        if (lastConfirmed.num === 23) {
+            this.setState({
+                confirmedPhrase: true
+            })
+        }
+    }
+
+    resetForm = () => {
+        this.setState({
+            newWallet: {
+                name: '',
+                password: '',
+                repeatPassword: ''
+            },
+            showPassword: false,
+            step: 0,
+            confirmedSafe: false,
+            walletSeed: null,
+            mnemonicPhrase: null,
+            mnemonicPhraseArray: [],
+            shuffledMnemonic: [],
+            confirmedPhrase: false
+        }, () => {
+            this.handleClose()
         })
     }
 
     render() {
         const { classes, t } = this.props;
-        const {showPassword, newWallet, open, step} = this.state;
+        const {showPassword, newWallet, open, step, mnemonicPhrase, confirmedPhrase} = this.state;
 
         return (
             <div>
@@ -173,14 +271,23 @@ class CreateWallet extends React.Component {
                                 </div>}
                                 {step === 2 && <div>
                                     <Typography>The phrase is case sensitive. Please make sure you write down and save your recovery phrase. You will need this phrase to use and restore your wallet.</Typography>
-                                    <Typography>{MnemonicPhrase.keyToMnemonic(key)}</Typography>
+                                    <Grid container style={{textAlign: 'center'}} spacing={0}>
+                                        {mnemonicPhrase && mnemonicPhrase.split(' ').map((word, index) => (
+                                            <Grid item key={index} xs={3}><Chip label={`${index + 1}. ${word}`} className={classes.chip} /></Grid>
+                                        ))}
+                                    </Grid>
                                     <Button variant="raised" color="primary" className={classes.button} onClick={this.nextStep}>
                                         Yes, I have written it down
                                     </Button>
                                 </div>}
                                 {step === 3 && <div>
                                     <Typography>Confirm Recovery Password</Typography>
-                                    <Button variant="raised" color="primary" className={classes.button} onClick={this.handleClose}>
+                                    <Grid container style={{textAlign: 'center'}} spacing={0}>
+                                        {this.state.mnemonicPhraseArray.map((wordObj, index) => (
+                                            <Grid item key={index} xs={3}><Chip style={{background: wordObj.confirmed ? '#2df69f' : '', color: wordObj.confirmed ? 'white' : 'black'}} label={`${wordObj.word}`} className={classes.chip} onClick={() => {this.checkOrder(wordObj.word)}}/></Grid>
+                                        ))}
+                                    </Grid>
+                                    <Button variant="raised" color="primary" className={classes.button} onClick={this.resetForm} disabled={!confirmedPhrase}>
                                         Confirm
                                     </Button>
                                 </div>}
@@ -197,7 +304,20 @@ CreateWallet.propTypes = {
     classes: PropTypes.object.isRequired,
 };
 
+function mapStateToProps(state) {
+    return {
+        nimiq: state.nimiq
+    };
+}
+
+function mapPropsToDispatch(dispatch) {
+    return {
+        nimiqActions: bindActionCreators(nimiqActions, dispatch)
+    };
+}
+
 export default compose(
+    connect(mapStateToProps, mapPropsToDispatch),
     withStyles(styles, {withTheme: true}),
     translate('translations')
 )(CreateWallet);

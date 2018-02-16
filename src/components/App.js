@@ -6,10 +6,12 @@ import Drawer from './Drawer';
 import Loading from './Loading';
 import FullHeight from './FullHeight';
 import _ from 'lodash';
+import Dexie from 'dexie';
 import '../assets/css/App.css';
 
 
 const $ = {};
+var db;
 
 class App extends React.Component {
 
@@ -29,6 +31,17 @@ class App extends React.Component {
 
     componentWillMount() {
         this._startInstance();
+        db = new Dexie('blocks');
+
+        // Define a schema
+        db.version(1).stores({
+            blocks: 'blockHeight, minerAddr'
+        });
+
+        // Open the database
+        db.open().catch(function(error) {
+            alert('Uh oh : ' + error);
+        });
     }
 
     componentWillReceiveProps(nextProps) {
@@ -116,7 +129,11 @@ class App extends React.Component {
 
     _onHeadChanged = () => {
         const height = $.blockchain.height;
-        console.log('head changed ', height)
+        console.log('head changed ', $.blockchain)
+        db.blocks.add({
+            blockHeight: height,
+            minerAddr: $.blockchain.head.body.minerAddr.toUserFriendlyAddress()
+        });
         const globalHashRate = this._getGlobalHashrate();
         this.props.nimiqActions.updateHashRate({
             hashRate: this._setHashrate($.miner.hashrate),
@@ -409,8 +426,15 @@ class App extends React.Component {
                     name: existingWallet ? existingWallet.name : '',
                     address: address.toUserFriendlyAddress(),
                     balance: Nimiq.Policy.satoshisToCoins(_account.balance),
-                    transactions: []
+                    transactions: [],
+                    minedBlocks: []
                 }
+                db.blocks
+                    .where('minerAddr')
+                    .equals(address.toUserFriendlyAddress())
+                    .each (function (block) {
+                        _account.minedBlocks.push(block.blockHeight)
+                    });
                 return $.blockchain.getTransactionReceiptsByAddress(address).then((transactions) => {
                     if (transactions.length > 0) {
                         _.each(transactions, (transaction) => {
@@ -427,7 +451,6 @@ class App extends React.Component {
                                             fee: Nimiq.Policy.satoshisToCoins(transaction.fee),
                                             data: Nimiq.BufferUtils.toHex(transaction.data),
                                             blockHeight: block.height,
-                                            mined: false,
                                             hash: transaction.hash().toHex(),
                                             timestamp: block.timestamp
                                         })
