@@ -1,7 +1,6 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import { withStyles } from 'material-ui/styles';
-import TextField from 'material-ui/TextField';
 import Typography from 'material-ui/Typography';
 import Modal from 'material-ui/Modal';
 import Button from 'material-ui/Button';
@@ -16,9 +15,11 @@ import { FormControl } from 'material-ui/Form';
 import {connect} from "react-redux";
 import { translate } from 'react-i18next';
 import { compose } from 'recompose';
+import FullHeight from '../../FullHeight';
 
 import Basic from './basic';
 import General from './general';
+import Vesting from './vesting';
 
 const styles = theme => ({
     button: {
@@ -97,6 +98,54 @@ class Send extends React.Component {
         window.$.mempool.pushTransaction(tx)
     }
 
+    handleVestingTransaction = (values) => {
+        console.log('handleVestingTransaction ', values)
+        const vestingOwner = values.owner;
+        const vestingStepBlocks = parseFloat(values['step-blocks']);
+        if ( vestingOwner === null || vestingStepBlocks === null) return null;
+
+        const requiresVestingTotalAmount = values.total !== '';
+        const requiresVestingStartAndStepAmount = values.start !== ''
+            || values['step-amount'] !== '' || requiresVestingTotalAmount;
+
+        const bufferSize = vestingOwner.serializedSize + /* vestingStepBlocks*/ 4
+            + (requiresVestingStartAndStepAmount? /* vestingStart */ 4 + /* vestingStepAmount */ 8 : 0)
+            + (requiresVestingTotalAmount? /* vestingTotalAmount */ 8 : 0);
+
+        let vestingStart, vestingStepAmount, vestingTotalAmount;
+
+        if (requiresVestingStartAndStepAmount) {
+            vestingStart = parseFloat(values.start);
+            vestingStepAmount = parseFloat(values['step-amount']);
+            if (vestingStart === null || vestingStepAmount === null) return null;
+            vestingStepAmount = Nimiq.Policy.coinsToSatoshis(vestingStepAmount);
+        }
+        if (requiresVestingTotalAmount) {
+            vestingTotalAmount = parseFloat(values.total);
+            if (vestingTotalAmount === null) return null;
+            vestingTotalAmount = Nimiq.Policy.coinsToSatoshis(vestingTotalAmount);
+        }
+
+        const buffer = new Nimiq.SerialBuffer(bufferSize);
+        vestingOwner.serialize(buffer);
+
+        if (requiresVestingStartAndStepAmount) {
+            buffer.writeUint32(vestingStart);
+            buffer.writeUint32(vestingStepBlocks);
+            buffer.writeUint64(vestingStepAmount);
+            if (requiresVestingTotalAmount) {
+                buffer.writeUint64(vestingTotalAmount);
+            }
+        } else {
+            buffer.writeUint32(vestingStepBlocks);
+        }
+
+        const recipient = Nimiq.Address.CONTRACT_CREATION;
+        const recipientType = Nimiq.Account.Type.VESTING;
+        const flags = Nimiq.Transaction.Flag.CONTRACT_CREATION;
+        return new Nimiq.ExtendedTransaction(values.owner, Nimiq.Account.Type.BASIC, recipient, recipientType, Nimiq.Policy.coinsToSatoshis(values.amount), Nimiq.Policy.coinsToSatoshis(values.fee), values.start, flags, buffer);
+    }
+
     sign(tx) {
         const keyPair = this.props.nimiq.selectedWallet._wlt.keyPair;
         const signature = Nimiq.Signature.create(keyPair.privateKey, keyPair.publicKey, tx.serializeContent());
@@ -112,23 +161,26 @@ class Send extends React.Component {
         const {transactionType} = this.state;
         return (
             <div>
-                <FormControl className={classes.formControl}>
-                    <InputLabel htmlFor="age-simple">Transaction Type</InputLabel>
-                    <Select
-                        value={this.state.transactionType}
-                        onChange={this.handleChange}
-                        input={<Input name="transaction-type" id="transaction-type" />}
-                        style={{width: 300}}
-                    >
-                        <MenuItem value={'basic'}>Basic</MenuItem>
-                        <MenuItem value={'general'}>General</MenuItem>
-                        <MenuItem value={'vesting'}>Vesting Contract Creation</MenuItem>
-                        <MenuItem value={'htlc'}>HTLC Contract Creation</MenuItem>
-                        <MenuItem value={'plain'}>Plain Extended</MenuItem>
-                    </Select>
-                </FormControl>
-                {transactionType === 'basic' && <Basic onSubmit={this.handleBasicTransaction}/>}
-                {transactionType === 'general' && <General onSubmit={this.handleBasicTransaction}/>}
+                <FullHeight scroll subtract={160}>
+                    <FormControl className={classes.formControl}>
+                        <InputLabel htmlFor="age-simple">Transaction Type</InputLabel>
+                        <Select
+                            value={this.state.transactionType}
+                            onChange={this.handleChange}
+                            input={<Input name="transaction-type" id="transaction-type" />}
+                            style={{width: 300}}
+                        >
+                            <MenuItem value={'basic'}>Basic</MenuItem>
+                            <MenuItem value={'general'}>General</MenuItem>
+                            <MenuItem value={'vesting'}>Vesting Contract Creation</MenuItem>
+                            <MenuItem value={'htlc'}>HTLC Contract Creation</MenuItem>
+                            <MenuItem value={'plain'}>Plain Extended</MenuItem>
+                        </Select>
+                    </FormControl>
+                    {transactionType === 'basic' && <Basic onSubmit={this.handleBasicTransaction}/>}
+                    {transactionType === 'general' && <General onSubmit={this.handleBasicTransaction}/>}
+                    {transactionType === 'vesting' && <Vesting onSubmit={this.handleVestingTransaction}/>}
+                </FullHeight>
                 <Modal
                     aria-labelledby="simple-modal-title"
                     aria-describedby="simple-modal-description"

@@ -22,7 +22,7 @@ class General extends React.Component {
         return (
             <Basic onSubmit={this.props.onSubmit}>
                 <Grid item xs={12}>
-                    <Field className={classes.textField} name="note" component={TextField} placeholder="Note" label="Enter an optional note" required/>
+                    <Field className={classes.textField} name="note" component={TextField} placeholder="Enter an optional note" label="Note"/>
                 </Grid>
             </Basic>
         );
