@@ -7,13 +7,11 @@ import { translate } from 'react-i18next';
 import { compose } from 'recompose';
 import { Field, reduxForm, reset } from 'redux-form'
 import { TextField } from 'redux-form-material-ui';
-import { FormControl } from 'material-ui/Form';
+import Grid from 'material-ui/Grid';
 
 const styles = theme => ({
     textField: {
-        marginLeft: theme.spacing.unit,
-        marginRight: theme.spacing.unit,
-        width: 200,
+        width: 300,
     },
 });
 
@@ -23,7 +21,6 @@ const afterSubmit = (result, dispatch) => dispatch(reset('basic'));
 class Basic extends React.Component {
 
     submit = (values) => {
-        console.log('values ', values)
         values.amount = parseFloat(values.amount);
         values.fee = parseFloat(values.fee);
         this.props.onSubmit(values)
@@ -33,12 +30,23 @@ class Basic extends React.Component {
         const { classes, handleSubmit } = this.props;
         return (
             <form onSubmit={handleSubmit(this.submit)}>
-                <Field className={classes.textField} name="receiver" component={TextField} placeholder="Wallet Address" label="Receiver" required/>
-                <Field className={classes.textField} name="amount" component={TextField} placeholder="0.00000" label="Amount" type="number" required/>
-                <Field className={classes.textField} name="fee" component={TextField} placeholder="0.00000" label="Fee" type="number" required/>
-                <Button variant="raised" color="primary" className={classes.button} type="submit">
-                    Next
-                </Button>
+                <Grid container>
+                    <Grid item xs={12}>
+                        <Field className={classes.textField} name="receiver" component={TextField} placeholder="Wallet Address" label="Receiver" required/>
+                    </Grid>
+                    <Grid item xs={12}>
+                        <Field className={classes.textField} name="amount" component={TextField} placeholder="0.00000" label="Amount" type="number" required/>
+                    </Grid>
+                    <Grid item xs={12}>
+                        <Field className={classes.textField} name="fee" component={TextField} placeholder="0.00000" label="Fee" type="number" required/>
+                    </Grid>
+                    {this.props.children}
+                    <Grid item xs={12}>
+                        <Button variant="raised" color="primary" className={classes.button} type="submit">
+                            Next
+                        </Button>
+                    </Grid>
+                </Grid>
 
             </form>
         );

@@ -18,6 +18,7 @@ import { translate } from 'react-i18next';
 import { compose } from 'recompose';
 
 import Basic from './basic';
+import General from './general';
 
 const styles = theme => ({
     button: {
@@ -39,6 +40,9 @@ const styles = theme => ({
         minWidth: 300,
         maxWidth: 450
     },
+    formControl: {
+        marginBottom: 10
+    }
 });
 
 
@@ -62,13 +66,29 @@ class Send extends React.Component {
     };
 
     sendBasicTransaction = (values) => {
-        console.log('Nimiq.Policy.satoshisToCoins(values.amount) ', Nimiq.Policy.satoshisToCoins(values.amount))
+        console.log('wlt ', this.props.nimiq.selectedWallet._wlt)
         return new Nimiq.BasicTransaction(this.props.nimiq.selectedWallet._wlt.publicKey, Nimiq.Address.fromUserFriendlyAddress(values.receiver), Nimiq.Policy.coinsToSatoshis(values.amount), Nimiq.Policy.coinsToSatoshis(values.fee), window.$.blockchain.height)
+    }
+
+    sendGeneralTransaction(values) {
+        console.log('values ', values);
+        console.log('this.props.nimiq.selectedWallet._wlt ', this.props.nimiq.selectedWallet._wlt)
+        // TODO: Get Account Types Dynamically
+        const freeformData = Nimiq.BufferUtils.fromAscii(values.note);
+        return new Nimiq.ExtendedTransaction(this.props.nimiq.selectedWallet._wlt.publicKey, Nimiq.Account.Type.BASIC, Nimiq.Address.fromUserFriendlyAddress(values.receiver), Nimiq.Account.Type.BASIC, Nimiq.Policy.coinsToSatoshis(values.amount), Nimiq.Policy.coinsToSatoshis(values.fee), window.$.blockchain.height, Nimiq.Transaction.Flag.NONE, freeformData);
     }
 
     handleBasicTransaction = (values) => {
         console.log('handleBasicTransaction ', values)
-        const tx = this.sendBasicTransaction(values)
+        let tx;
+        switch (this.state.transactionType) {
+            case 'basic':
+                tx = this.sendBasicTransaction(values)
+                break;
+            case 'general':
+                tx = this.sendGeneralTransaction(values)
+                break;
+        }
         if (!tx) throw Error('Failed to generate transaction.');
         const signResult = this.sign(tx);
         tx.signature = signResult.signature;
@@ -108,6 +128,7 @@ class Send extends React.Component {
                     </Select>
                 </FormControl>
                 {transactionType === 'basic' && <Basic onSubmit={this.handleBasicTransaction}/>}
+                {transactionType === 'general' && <General onSubmit={this.handleBasicTransaction}/>}
                 <Modal
                     aria-labelledby="simple-modal-title"
                     aria-describedby="simple-modal-description"

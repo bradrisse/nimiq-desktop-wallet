@@ -442,6 +442,7 @@ class App extends React.Component {
                             _.each(transactions, (transaction) => {
                                 $.consensus.blockchain.getBlock(transaction.blockHash).then((block) => {
                                     _.each(block.body.transactions, (transaction) => {
+                                        console.log('transaction ', transaction)
                                         var _recipient = transaction.recipient.toUserFriendlyAddress();
                                         var _sender = transaction.sender.toUserFriendlyAddress();
                                         var currentAddress = address.toUserFriendlyAddress();
