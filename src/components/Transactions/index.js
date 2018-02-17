@@ -8,6 +8,7 @@ import ReceivingIcon from 'material-ui-icons/FileDownload';
 import SendingIcon from 'material-ui-icons/FileUpload';
 import TransactionModal from '../Transactions/transactionModal';
 import Empty from '../Empty';
+import _ from 'lodash';
 
 const styles = theme => ({
 });
@@ -34,13 +35,13 @@ class Transactions extends React.Component {
                 {nimiq.selectedWallet && nimiq.selectedWallet.transactions.length <= 0 && <Empty message="transactions.emptyRecent" subtract={288}/>}
 
                 {nimiq.selectedWallet && nimiq.selectedWallet.transactions.length > 0 && <List>
-                    {nimiq.selectedWallet.transactions.map((transaction, index) => (
+                    {_.sortBy(nimiq.selectedWallet.transactions, 'timestamp').reverse().map((transaction, index) => (
                         <ListItem key={index} onClick={() => {this.viewTransaction(transaction)}} button>
                             <Avatar>
                                 {nimiq.selectedWallet.address === transaction.recipient && <ReceivingIcon />}
                                 {nimiq.selectedWallet.address === transaction.sender && <SendingIcon />}
                             </Avatar>
-                            <ListItemText primary={`NIM Received`} secondary={`${new Date(transaction.timestamp * 1000).toLocaleString()}`} />
+                            <ListItemText primary={`NIM ${nimiq.selectedWallet.address === transaction.recipient ? 'Received' : 'Sent'}`} secondary={`${new Date(transaction.timestamp * 1000).toLocaleString()}`} />
                             <span style={{float: 'right'}}>{transaction.value} NIM</span>
                         </ListItem>
                     ))}

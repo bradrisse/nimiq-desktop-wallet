@@ -8,7 +8,7 @@ import WalletList from './list';
 import Grid from 'material-ui/Grid';
 import { translate } from 'react-i18next';
 import Summary from './summary';
-import Send from './send';
+import Send from './Send';
 import Settings from './settings';
 import Receive from './receive';
 import Transactions from '../Transactions';

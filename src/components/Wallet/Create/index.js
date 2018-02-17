@@ -1,11 +1,11 @@
 import React from 'react';
 import {connect} from "react-redux";
 import {bindActionCreators} from "redux";
-import {actions as nimiqActions} from "../ducks/nimiq";
+import {actions as nimiqActions} from "../../ducks/nimiq";
 import PropTypes from 'prop-types';
 import { withStyles } from 'material-ui/styles';
 import Modal from 'material-ui/Modal';
-import Centered from '../Centered';
+import Centered from '../../Centered';
 import { translate } from 'react-i18next';
 import { compose } from 'recompose';
 import TextField from 'material-ui/TextField';
@@ -133,6 +133,7 @@ class CreateWallet extends React.Component {
             })
             var _newWallet = {
                 name: this.state.newWallet.name,
+                _wlt: wlt,
                 address: wlt.address.toUserFriendlyAddress(),
                 balance: 0,
                 transactions: []

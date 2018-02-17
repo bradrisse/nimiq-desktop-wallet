@@ -8,6 +8,7 @@ import Grid from 'material-ui/Grid';
 import Toolbar from 'material-ui/Toolbar';
 import AppBar from 'material-ui/AppBar';
 import { translate } from 'react-i18next';
+import Centered from '../Centered';
 
 const styles = theme => ({
     button: {
@@ -16,11 +17,19 @@ const styles = theme => ({
     paper: {
         width: theme.spacing.unit * 50,
         backgroundColor: theme.palette.background.paper,
-        boxShadow: theme.shadows[5]
+        boxShadow: theme.shadows[5],
+        zIndex: 3,
+        padding: 25
     },
     root: {
         padding: theme.spacing.unit * 4,
-    }
+    },
+    modal: {
+        zIndex: 3,
+        position: 'relative',
+        minWidth: 300,
+        maxWidth: 450
+    },
 });
 
 
@@ -55,70 +64,64 @@ class TransactionModal extends React.Component {
                     onClose={this.handleClose}
                     onBackdropClick={this.handleClose}
                 >
-                    <Grid container style={{ flexGrow: 1, height: "100%", width: "100%", margin: 0 }}>
-                        <Grid item xs={12}>
-                            <Grid container alignItems={"center"} direction={"row"} justify={"center"} style={{ height: "100%" }}>
-                                <Grid item>
-                                    {transaction && <div className={classes.paper}>
-                                        <AppBar position="static" color="default">
-                                            <Toolbar>
-                                                <Typography variant="title" color="inherit">
-                                                    Transaction Info
-                                                </Typography>
-                                            </Toolbar>
-                                        </AppBar>
-                                        <div className={classes.root}>
-                                            <Typography variant="title">
-                                                To
-                                            </Typography>
-                                            <Typography variant="subheading">
-                                                {transaction.recipient}
-                                            </Typography>
-                                            <Typography variant="title">
-                                                From
-                                            </Typography>
-                                            <Typography variant="subheading">
-                                                {transaction.sender}
-                                            </Typography>
-                                            <Grid container>
-                                                <Grid item xs={6}>
-                                                    <Typography variant="title">
-                                                        Amount
-                                                    </Typography>
-                                                    <Typography variant="subheading">
-                                                        {transaction.value}
-                                                    </Typography>
-                                                </Grid>
-                                                <Grid item xs={6}>
-                                                    <Typography variant="title">
-                                                        Fees
-                                                    </Typography>
-                                                    <Typography variant="subheading">
-                                                        {transaction.fee}
-                                                    </Typography>
-                                                </Grid>
-                                            </Grid>
-                                            <Typography variant="title">
-                                                Note
-                                            </Typography>
-                                            <Typography variant="subheading">
-                                                {transaction.data}
-                                            </Typography>
-                                            <Typography variant="title">
-                                                Timestamp
-                                            </Typography>
-                                            <Typography variant="subheading">
-                                                {transaction.timestamp}
-                                            </Typography>
-                                            <Button variant="raised" color="primary" className={classes.button} onClick={this.handleClose}>
-                                                Close
-                                            </Button>
-                                        </div>
-                                    </div>}
+                    <Centered>
+                        {transaction && <div className={classes.modal}>
+                            <AppBar position="static" color="default">
+                                <Toolbar>
+                                    <Typography variant="title" color="inherit">
+                                        Transaction Info
+                                    </Typography>
+                                </Toolbar>
+                            </AppBar>
+                            <div className={classes.paper}>
+                                <Typography variant="title">
+                                    To
+                                </Typography>
+                                <Typography variant="subheading">
+                                    {transaction.recipient}
+                                </Typography>
+                                <Typography variant="title">
+                                    From
+                                </Typography>
+                                <Typography variant="subheading">
+                                    {transaction.sender}
+                                </Typography>
+                                <Grid container>
+                                    <Grid item xs={6}>
+                                        <Typography variant="title">
+                                            Amount
+                                        </Typography>
+                                        <Typography variant="subheading">
+                                            {transaction.value}
+                                        </Typography>
+                                    </Grid>
+                                    <Grid item xs={6}>
+                                        <Typography variant="title">
+                                            Fees
+                                        </Typography>
+                                        <Typography variant="subheading">
+                                            {transaction.fee}
+                                        </Typography>
+                                    </Grid>
                                 </Grid>
-                            </Grid>
-                        </Grid>
-                    </Grid>
+                                <Typography variant="title">
+                                    Note
+                                </Typography>
+                                <Typography variant="subheading">
+                                    {transaction.data}
+                                </Typography>
+                                <Typography variant="title">
+                                    Timestamp
+                                </Typography>
+                                <Typography variant="subheading">
+                                    {transaction.timestamp}
+                                </Typography>
+                                <Button variant="raised" color="primary" className={classes.button} onClick={this.handleClose}>
+                                    Close
+                                </Button>
+                            </div>
+                        </div>}
+                    </Centered>
                 </Modal>
             </div>
         );

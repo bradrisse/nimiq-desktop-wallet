@@ -421,50 +421,52 @@ class App extends React.Component {
             var existingWallet = _.find(wallets, (wallet) => {
                 return wallet.address === address.toUserFriendlyAddress()
             })
-            _addressPromises.push($.accounts.get(address).then((_account) => {
-                var _account = {
-                    name: existingWallet ? existingWallet.name : '',
-                    address: address.toUserFriendlyAddress(),
-                    balance: Nimiq.Policy.satoshisToCoins(_account.balance),
-                    transactions: [],
-                    minedBlocks: []
-                }
-                db.blocks
-                    .where('minerAddr')
-                    .equals(address.toUserFriendlyAddress())
-                    .each (function (block) {
-                        _account.minedBlocks.push(block.blockHeight)
-                    });
-                return $.blockchain.getTransactionReceiptsByAddress(address).then((transactions) => {
-                    if (transactions.length > 0) {
-                        _.each(transactions, (transaction) => {
-                            $.consensus.blockchain.getBlock(transaction.blockHash).then((block) => {
-                                _.each(block.body.transactions, (transaction) => {
-                                    var _recipient = transaction.recipient.toUserFriendlyAddress();
-                                    var _sender = transaction.sender.toUserFriendlyAddress();
-                                    var currentAddress = address.toUserFriendlyAddress();
-                                    if (_recipient === currentAddress || _sender === currentAddress) {
-                                        _account.transactions.push( {
-                                            sender: _sender,
-                                            recipient: _recipient,
-                                            value: Nimiq.Policy.satoshisToCoins(transaction.value),
-                                            fee: Nimiq.Policy.satoshisToCoins(transaction.fee),
-                                            data: Nimiq.BufferUtils.toHex(transaction.data),
-                                            blockHeight: block.height,
-                                            hash: transaction.hash().toHex(),
-                                            timestamp: block.timestamp
-                                        })
-                                    }
+            _addressPromises.push($.accounts.get(address).then((_accountObj) => {
+                return $.walletStore.get(address).then((wlt) => {
+                    var _account = {
+                        name: existingWallet ? existingWallet.name : '',
+                        address: address.toUserFriendlyAddress(),
+                        balance: Nimiq.Policy.satoshisToCoins(_accountObj.balance),
+                        _wlt: wlt,
+                        transactions: [],
+                        minedBlocks: []
+                    }
+                    db.blocks
+                        .where('minerAddr')
+                        .equals(address.toUserFriendlyAddress())
+                        .each (function (block) {
+                            _account.minedBlocks.push(block.blockHeight)
+                        });
+                    return $.blockchain.getTransactionReceiptsByAddress(address).then((transactions) => {
+                        if (transactions.length > 0) {
+                            _.each(transactions, (transaction) => {
+                                $.consensus.blockchain.getBlock(transaction.blockHash).then((block) => {
+                                    _.each(block.body.transactions, (transaction) => {
+                                        var _recipient = transaction.recipient.toUserFriendlyAddress();
+                                        var _sender = transaction.sender.toUserFriendlyAddress();
+                                        var currentAddress = address.toUserFriendlyAddress();
+                                        if (_recipient === currentAddress || _sender === currentAddress) {
+                                            _account.transactions.push( {
+                                                sender: _sender,
+                                                recipient: _recipient,
+                                                value: Nimiq.Policy.satoshisToCoins(transaction.value),
+                                                fee: Nimiq.Policy.satoshisToCoins(transaction.fee),
+                                                data: Nimiq.BufferUtils.toHex(transaction.data),
+                                                blockHeight: block.height,
+                                                hash: transaction.hash().toHex(),
+                                                timestamp: block.timestamp
+                                            })
+                                        }
+                                    })
                                 })
                             })
-                        })
 
-                        return _account;
-                    } else {
-                        return _account;
-                    }
+                            return _account;
+                        } else {
+                            return _account;
+                        }
+                    })
                 })
-
             }))
         })
 
@@ -498,6 +500,7 @@ class App extends React.Component {
                     $.network.connect();
 
                     $.walletStore.list().then(addresses => {
+                        console.log('addresses ', addresses)
                         this.setAddresses(addresses)
                     });
 

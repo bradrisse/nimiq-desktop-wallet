@@ -8,7 +8,16 @@ import Button from 'material-ui/Button';
 import Grid from 'material-ui/Grid';
 import Toolbar from 'material-ui/Toolbar';
 import AppBar from 'material-ui/AppBar';
-import Centered from '../Centered';
+import Centered from '../../Centered';
+import Input, { InputLabel } from 'material-ui/Input';
+import Select from 'material-ui/Select';
+import { MenuItem } from 'material-ui/Menu';
+import { FormControl } from 'material-ui/Form';
+import {connect} from "react-redux";
+import { translate } from 'react-i18next';
+import { compose } from 'recompose';
+
+import Basic from './basic';
 
 const styles = theme => ({
     button: {
@@ -37,6 +46,7 @@ class Send extends React.Component {
 
     state = {
         open: false,
+        transactionType: 'basic'
     };
 
     handleOpen = () => {
@@ -47,43 +57,57 @@ class Send extends React.Component {
         this.setState({ open: false });
     };
 
+    handleChange = (e) => {
+        this.setState({ transactionType: e.target.value });
+    };
+
+    sendBasicTransaction = (values) => {
+        console.log('Nimiq.Policy.satoshisToCoins(values.amount) ', Nimiq.Policy.satoshisToCoins(values.amount))
+        return new Nimiq.BasicTransaction(this.props.nimiq.selectedWallet._wlt.publicKey, Nimiq.Address.fromUserFriendlyAddress(values.receiver), Nimiq.Policy.coinsToSatoshis(values.amount), Nimiq.Policy.coinsToSatoshis(values.fee), window.$.blockchain.height)
+    }
+
+    handleBasicTransaction = (values) => {
+        console.log('handleBasicTransaction ', values)
+        const tx = this.sendBasicTransaction(values)
+        if (!tx) throw Error('Failed to generate transaction.');
+        const signResult = this.sign(tx);
+        tx.signature = signResult.signature;
+        tx.proof = signResult.proof;
+        console.log('pushing transaction ', tx)
+        window.$.mempool.pushTransaction(tx)
+    }
+
+    sign(tx) {
+        const keyPair = this.props.nimiq.selectedWallet._wlt.keyPair;
+        const signature = Nimiq.Signature.create(keyPair.privateKey, keyPair.publicKey, tx.serializeContent());
+        const proof = Nimiq.SignatureProof.singleSig(keyPair.publicKey, signature).serialize();
+        return {
+            signature: signature,
+            proof: proof
+        };
+    }
+
     render() {
         const { classes } = this.props;
+        const {transactionType} = this.state;
         return (
             <div>
-                <TextField
-                    id="full-width"
-                    label="Receiver"
-                    InputLabelProps={{
-                        shrink: true,
-                    }}
-                    placeholder="Wallet Address"
-                    fullWidth
-                    margin="normal"
-                />
-                <TextField
-                    id="full-width"
-                    label="Amount"
-                    InputLabelProps={{
-                        shrink: true,
-                    }}
-                    placeholder="0.00000"
-                    fullWidth
-                    margin="normal"
-                />
-                <TextField
-                    id="full-width"
-                    label="Fee"
-                    InputLabelProps={{
-                        shrink: true,
-                    }}
-                    placeholder="0.00000"
-                    fullWidth
-                    margin="normal"
-                />
-                <Button variant="raised" color="primary" className={classes.button} onClick={this.handleOpen}>
-                    Next
-                </Button>
+                <FormControl className={classes.formControl}>
+                    <InputLabel htmlFor="age-simple">Transaction Type</InputLabel>
+                    <Select
+                        value={this.state.transactionType}
+                        onChange={this.handleChange}
+                        input={<Input name="transaction-type" id="transaction-type" />}
+                        style={{width: 300}}
+                    >
+                        <MenuItem value={'basic'}>Basic</MenuItem>
+                        <MenuItem value={'general'}>General</MenuItem>
+                        <MenuItem value={'vesting'}>Vesting Contract Creation</MenuItem>
+                        <MenuItem value={'htlc'}>HTLC Contract Creation</MenuItem>
+                        <MenuItem value={'plain'}>Plain Extended</MenuItem>
+                    </Select>
+                </FormControl>
+                {transactionType === 'basic' && <Basic onSubmit={this.handleBasicTransaction}/>}
                 <Modal
                     aria-labelledby="simple-modal-title"
                     aria-describedby="simple-modal-description"
@@ -118,7 +142,7 @@ class Send extends React.Component {
                                         </Typography>
                                     </Grid>
                                 </Grid>
-                                <Button variant="raised" color="primary" className={classes.button} onClick={this.handleClose}>
+                                <Button variant="raised" color="primary" className={classes.button} onClick={this.handleBasicTransaction}>
                                     Send
                                 </Button>
                             </div>
@@ -135,4 +159,14 @@ Send.propTypes = {
     classes: PropTypes.object.isRequired,
 };
 
-export default withStyles(styles)(Send);
+function mapStateToProps(state) {
+    return {
+        nimiq: state.nimiq
+    };
+}
+
+export default compose(
+    connect(mapStateToProps),
+    withStyles(styles),
+    translate('translations')
+)(Send);

@@ -9,7 +9,7 @@ import {actions as nimiqActions} from "../ducks/nimiq";
 import Iqon from '../iqon';
 import FullHeight from '../FullHeight';
 import { translate } from 'react-i18next';
-import CreateWallet from './create';
+import CreateWallet from './Create';
 import { compose } from 'recompose';
 
 const styles = theme => ({
