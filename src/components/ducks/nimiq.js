@@ -24,7 +24,8 @@ export const types = {
   SET_WALLET_NAME: "SET_WALLET_NAME",
   SET_SELECTED_WALLET: "SET_SELECTED_WALLET",
   ADD_WALLET: "ADD_WALLET",
-  REMOVE_WALLET: "REMOVE_WALLET"
+  REMOVE_WALLET: "REMOVE_WALLET",
+  COMPLETE_SETUP: "COMPLETE_SETUP"
 };
 
 export const initial = {
@@ -55,7 +56,8 @@ export const initial = {
   showRecoverWallet: false,
   isRunningInAnother: false,
   selectedWallet: null,
-  miningWallet: null
+  miningWallet: null,
+  setupComplete: false
 };
 
 export default function(state = initial, action) {
@@ -106,6 +108,8 @@ export default function(state = initial, action) {
           return { ...state, showRecoverWallet: action.payload }
       case `${types.TOGGLE_CREATE_WALLET}`:
           return { ...state, showCreateWallet: action.payload }
+      case `${types.COMPLETE_SETUP}`:
+          return { ...state, setupComplete: action.payload }
       case `${types.ADD_WALLET}`:
           var _wallets1 = state.wallets;
           _wallets1.push(action.payload)
@@ -148,6 +152,10 @@ export default function(state = initial, action) {
 }
 
 export const actions = {
+    completeSetup: data => ({
+        type: types.COMPLETE_SETUP,
+        payload: data
+    }),
     removeWallet: data => ({
         type: types.REMOVE_WALLET,
         payload: data

@@ -4,6 +4,7 @@ import {bindActionCreators} from "redux";
 import {actions as nimiqActions} from "./ducks/nimiq";
 import Drawer from './Drawer';
 import Loading from './Loading';
+import Setup from './Setup';
 import FullHeight from './FullHeight';
 import _ from 'lodash';
 import Dexie from 'dexie';
@@ -30,6 +31,9 @@ class App extends React.Component {
     };
 
     componentWillMount() {
+        if (window.localStorage.i18nextLng) {
+            this.props.nimiqActions.completeSetup(true)
+        }
         this._startInstance();
         db = new Dexie('blocks');
 
@@ -39,7 +43,7 @@ class App extends React.Component {
         });
 
         // Open the database
-        db.open().catch(function(error) {
+        db.open().catch(function (error) {
             alert('Uh oh : ' + error);
         });
     }
@@ -108,7 +112,15 @@ class App extends React.Component {
         this.props.nimiqActions.updateBlockHeight($.blockchain.height);
         nimiqActions.updateBlockReward(window.Nimiq.Policy.blockRewardAt($.blockchain.height));
 
-        // $.miner.startWork();
+        // $.walletStore.hasDefault().then(hasDefault => {
+        //     if (hasDefault) {
+        //         $.walletStore.getDefault().then(defaultWallet => {
+        //             this.startMiner(defaultWallet.address)
+        //         });
+        //     } else {
+        //         this._addWallet();
+        //     }
+        // });
     }
 
     _updateBalance = () => {
@@ -134,11 +146,11 @@ class App extends React.Component {
             blockHeight: height,
             minerAddr: $.blockchain.head.body.minerAddr.toUserFriendlyAddress()
         });
-        const globalHashRate = this._getGlobalHashrate();
-        this.props.nimiqActions.updateHashRate({
-            hashRate: this._setHashrate($.miner.hashrate),
-            globalHashRate: globalHashRate
-        });
+        // const globalHashRate = this._getGlobalHashrate();
+        // this.props.nimiqActions.updateHashRate({
+        //     hashRate: this._setHashrate($.miner.hashrate),
+        //     globalHashRate: globalHashRate
+        // });
         this.props.nimiqActions.updateBlockHeight(height);
     };
 
@@ -219,34 +231,34 @@ class App extends React.Component {
     _updateSyncProgress(state) {
         console.log('_updateSyncProgress ', state)
         //if (!$.consensus.established) {
-            var msg = "";
-            switch (state) {
-                case "sync-chain-proof":
-                    msg = "Downloading chain...";
-                    break;
-                case "verify-chain-proof":
-                    msg = "Verifying chain...";
-                    break;
-                case "sync-accounts-tree":
-                    msg = "Downloading Accounts...";
-                    break;
-                case "verify-accounts-tree":
-                    msg = "Verifying Accounts...";
-                    break;
-                case "sync-finalize":
-                    msg = "Synchronization Complete";
-                    break;
-                default:
-                    msg = "Connecting";
-                    break;
-            }
-            this.props.nimiqActions.updateMessage(msg);
+        var msg = "";
+        switch (state) {
+            case "sync-chain-proof":
+                msg = "Downloading chain...";
+                break;
+            case "verify-chain-proof":
+                msg = "Verifying chain...";
+                break;
+            case "sync-accounts-tree":
+                msg = "Downloading Accounts...";
+                break;
+            case "verify-accounts-tree":
+                msg = "Verifying Accounts...";
+                break;
+            case "sync-finalize":
+                msg = "Synchronization Complete";
+                break;
+            default:
+                msg = "Connecting";
+                break;
+        }
+        this.props.nimiqActions.updateMessage(msg);
         //}
     }
 
     _onTxsProcessed = () => {
         console.log('_onTxsProcessed >>>')
-        const { nimiq } = this.props;
+        const {nimiq} = this.props;
         if (nimiq.pendingTransaction) {
             nimiq.pendingTransaction.hash().then(hash => {
                 if (!$.mempool.getTransaction(hash)) {
@@ -299,120 +311,6 @@ class App extends React.Component {
             .then(() => this.startMiner(wallet.address));
     }
 
-  // init() {
-  //     const {nimiq, nimiqActions} = this.props;
-  //     nimiqActions.updateMessage("Connecting...");
-  //
-  //     let self = this;
-  //
-  //     window.Nimiq.init(
-  //         async function () {
-  //             window.$ = $;
-  //             $.consensus = await window.Nimiq.Consensus.full();
-  //
-  //             console.log('$.consensus ', $.consensus)
-  //
-  //             $.blockchain = $.consensus.blockchain;
-  //             $.mempool = $.consensus.mempool;
-  //             $.network = $.consensus.network;
-  //
-  //             var _hasWallet = $.walletStore.hasDefault().then(hasDefault => {
-  //                 if (!hasDefault) return Promise.resolve();
-  //                 return this.$.walletStore.getDefault().then(wallet => this._selectAddressWithoutWaiting(wallet.address));
-  //             });
-  //             console.log("_hasWallet ", _hasWallet);
-  //
-  //             if (_hasWallet || nimiq.wallet) {
-  //                 if (_hasWallet) {
-  //                     $.wallet = await window.Nimiq.WalletStore.getDefault();
-  //                 }
-  //
-  //                 // if (!nimiq.wallet) {
-  //                 //     self.props.nimiqActions.setWallet(window.$.wallet);
-  //                 // }
-  //                 //
-  //                 // console.log("isLocked ", $.wallet.isLocked);
-  //                 // if ($.wallet.isLocked) {
-  //                 //     self.props.nimiqActions.toggleWalletLock(true);
-  //                 // } else {
-  //                 //     self.props.nimiqActions.toggleWalletLock(false);
-  //                 // }
-  //                 //
-  //                 // if (self.state.clientType !== "nano") {
-  //                 //     // the nano client does not sync the full account info and can not mine.
-  //                 //     $.accounts = $.blockchain.accounts;
-  //                 //     $.miner = new window.Nimiq.Miner($.blockchain, $.mempool, $.wallet.address);
-  //                 // }
-  //                 //
-  //                 // console.log("miner", $.miner);
-  //                 // if ($.miner._blockchain) {
-  //                 //     console.log($.miner._blockchain.height);
-  //                 //     self.props.nimiqActions.updateBlockHeight($.miner._blockchain.height);
-  //                 // }
-  //                 //
-  //                 // // Put the object into storage
-  //                 // if (window.localStorage.getItem("threadCount")) {
-  //                 //     console.log("thread count exists");
-  //                 //     self.props.nimiqActions.updateThreadCount(window.localStorage.getItem("threadCount"));
-  //                 // } else {
-  //                 //     console.log("thread count does not exists");
-  //                 //     var threadCount = navigator.hardwareConcurrency / 2 || 4;
-  //                 //     self.props.nimiqActions.updateThreadCount(threadCount);
-  //                 //     $.miner.threads = threadCount;
-  //                 //     window.localStorage.setItem("threadCount", threadCount.toString());
-  //                 // }
-  //
-  //                 $.consensus.on("established", () => self._onConsensusEstablished());
-  //                 $.consensus.on("lost", () => console.error("Consensus lost"));
-  //                 $.consensus.on("sync-chain-proof", () => self._updateSyncProgress("sync-chain-proof"));
-  //                 $.consensus.on("verify-chain-proof", () => self._updateSyncProgress("verify-chain-proof"));
-  //                 $.consensus.on("sync-accounts-tree", () => self._updateSyncProgress("sync-accounts-tree"));
-  //                 $.consensus.on("verify-accounts-tree", () => self._updateSyncProgress("verify-accounts-tree"));
-  //                 $.consensus.on("sync-finalize", () => self._updateSyncProgress("sync-finalize"));
-  //
-  //                 $.blockchain.on("head-changed", () => self._onHeadChanged());
-  //                 $.network.on("peers-changed", () => self._onPeersChanged());
-  //
-  //                 // $.miner.on("start", () => self._onMinerStarted());
-  //                 // $.miner.on("stop", () => self._onMinerStopped());
-  //                 // $.miner.on("block-mined", block => self._onBlockMined(block));
-  //                 // $.miner.on("hashrate-changed", () => self._onHashrateChanged());
-  //
-  //                 // $.mempool.on("transaction-added", tx => self._onTxReceived(tx));
-  //                 // $.mempool.on("transactions-ready", () => self._onTxsProcessed());
-  //                 $.consensus.on("syncing", () => self._onConsensusSyncing());
-  //
-  //                 $.network.connect();
-  //             } else {
-  //                 nimiqActions.updateMessage("Create or Load a Wallet");
-  //
-  //                 const wallet = await window.Nimiq.Wallet.createVolatile();
-  //                 //const wallet2 = await Wallet.load(wallet.exportPlain());
-  //                 console.log("address ", wallet.address.toUserFriendlyAddress());
-  //                 console.log("seed ", wallet.dump());
-  //
-  //                 nimiqActions.updateVolatileWallet({
-  //                     address: wallet.address.toUserFriendlyAddress(),
-  //                     seed: wallet.dump()
-  //                 });
-  //             }
-  //         },
-  //         function (code) {
-  //             switch (code) {
-  //                 case window.Nimiq.ERR_WAIT:
-  //                     console.error("Error: Already open in another tab or window.");
-  //                     break;
-  //                 case window.Nimiq.ERR_UNSUPPORTED:
-  //                     console.error("Error: Browser not supported");
-  //                     break;
-  //                 default:
-  //                     console.error("Error: Nimiq initialization error");
-  //                     break;
-  //             }
-  //         }
-  //     );
-  // }
-
     setAddresses = (addresses) => {
         let self = this;
         var _addressPromises = [];
@@ -434,7 +332,7 @@ class App extends React.Component {
                     db.blocks
                         .where('minerAddr')
                         .equals(address.toUserFriendlyAddress())
-                        .each (function (block) {
+                        .each(function (block) {
                             _account.minedBlocks.push(block.blockHeight)
                         });
                     return $.blockchain.getTransactionReceiptsByAddress(address).then((transactions) => {
@@ -447,7 +345,7 @@ class App extends React.Component {
                                         var _sender = transaction.sender.toUserFriendlyAddress();
                                         var currentAddress = address.toUserFriendlyAddress();
                                         if (_recipient === currentAddress || _sender === currentAddress) {
-                                            _account.transactions.push( {
+                                            _account.transactions.push({
                                                 sender: _sender,
                                                 recipient: _recipient,
                                                 value: Nimiq.Policy.satoshisToCoins(transaction.value),
@@ -505,16 +403,6 @@ class App extends React.Component {
                         this.setAddresses(addresses)
                     });
 
-                    $.walletStore.hasDefault().then(hasDefault => {
-                        if (hasDefault) {
-                            $.walletStore.getDefault().then(defaultWallet => {
-                                this.startMiner(defaultWallet.address)
-                            });
-                        } else {
-                            this._addWallet();
-                        }
-                    });
-
                     $.consensus.on("established", () => this._onConsensusEstablished());
                     $.consensus.on("lost", () => this.props.nimiqActions.updateConsensus(false));
                     // $.consensus.on("sync-chain-proof", () => this._updateSyncProgress("sync-chain-proof"));
@@ -528,7 +416,7 @@ class App extends React.Component {
 
                     resolve($);
                 });
-            }, function(code) {
+            }, function (code) {
                 switch (code) {
                     case Nimiq.ERR_WAIT:
                         console.log('error wait')
@@ -544,15 +432,16 @@ class App extends React.Component {
         });
     }
 
-  render() {
-      const {nimiq} = this.props
-    return (
-      <FullHeight>
-          {!nimiq.isConsensusEstablished && <Loading /> }
-          {nimiq.isConsensusEstablished && <Drawer /> }
-      </FullHeight>
-    );
-  }
+    render() {
+        const {nimiq} = this.props
+        return (
+            <FullHeight>
+                {!nimiq.isConsensusEstablished && <Loading/>}
+                {nimiq.isConsensusEstablished && !nimiq.setupComplete && <Setup/>}
+                {nimiq.isConsensusEstablished && nimiq.setupComplete && <Drawer/>}
+            </FullHeight>
+        );
+    }
 }
 
 function mapStateToProps(state) {
