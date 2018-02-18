@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM, { render } from 'react-dom';
 import App from './components/App';
-import reducers from "./components/ducks/combine";
+import reducers from "./ducks/combine";
 import { Provider } from "react-redux";
 import { createStore } from "redux";
 import { MuiThemeProvider, createMuiTheme } from 'material-ui/styles';

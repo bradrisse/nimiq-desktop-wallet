@@ -5,34 +5,13 @@ import TextField from 'material-ui/TextField';
 import Button from 'material-ui/Button';
 import {connect} from "react-redux";
 import {bindActionCreators} from "redux";
-import {actions as nimiqActions} from "../ducks/nimiq";
-import Modal from 'material-ui/Modal';
-import AppBar from 'material-ui/AppBar';
-import Typography from 'material-ui/Typography';
-import IconButton from 'material-ui/IconButton';
-import CloseIcon from 'material-ui-icons/Close';
-import Toolbar from 'material-ui/Toolbar';
-import Centered from '../Centered';
+import {actions as nimiqActions} from "../../ducks/nimiq";
+import BasicModal from '../../common/BasicModal';
 import _ from 'lodash';
 
 const styles = theme => ({
     button: {
         margin: theme.spacing.unit,
-    },
-    modal: {
-        zIndex: 3,
-        position: 'relative',
-        minWidth: 300,
-        maxWidth: 450
-    },
-    paper: {
-        backgroundColor: theme.palette.background.paper,
-        boxShadow: theme.shadows[5],
-        position: 'relative',
-        padding: 30
-    },
-    flex: {
-        flex: 1
     }
 });
 
@@ -123,36 +102,14 @@ class Settings extends Component {
                     Delete Wallet
                 </Button>
 
-                <Modal
-                    aria-labelledby="simple-modal-title"
-                    aria-describedby="simple-modal-description"
-                    open={this.state.open}
-                    onClose={this.handleClose}
-                >
-                    <Centered>
-                        <div className={classes.modal}>
-                            <AppBar position="static" color="default">
-                                <Toolbar>
-                                    <Typography variant="title" color="inherit" className={classes.flex}>
-                                        Delete Wallet
-                                    </Typography>
-                                    <IconButton
-                                        onClick={this.handleClose}
-                                        color="inherit"
-                                    >
-                                        <CloseIcon />
-                                    </IconButton>
-                                </Toolbar>
-                            </AppBar>
-                            <div className={classes.paper}>
-                                Are you absolutely sure you want to delete this wallet?
-                                <Button variant="raised" color="primary" className={classes.button} onClick={this.removeWallet}>
-                                    Yes, I'm Sure.
-                                </Button>
-                            </div>
-                        </div>
-                    </Centered>
-                </Modal>
+                <BasicModal isOpen={this.state.open} title="Delete Wallet">
+                    <div>
+                        Are you absolutely sure you want to delete this wallet?
+                        <Button variant="raised" color="primary" className={classes.button} onClick={this.removeWallet}>
+                            Yes, I'm Sure.
+                        </Button>
+                    </div>
+                </BasicModal>
 
             </div>
         );

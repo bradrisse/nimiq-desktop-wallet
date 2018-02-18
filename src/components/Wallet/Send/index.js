@@ -7,7 +7,7 @@ import Button from 'material-ui/Button';
 import Grid from 'material-ui/Grid';
 import Toolbar from 'material-ui/Toolbar';
 import AppBar from 'material-ui/AppBar';
-import Centered from '../../Centered';
+import Centered from '../../../common/Centered';
 import Input, { InputLabel } from 'material-ui/Input';
 import Select from 'material-ui/Select';
 import { MenuItem } from 'material-ui/Menu';
@@ -15,7 +15,7 @@ import { FormControl } from 'material-ui/Form';
 import {connect} from "react-redux";
 import { translate } from 'react-i18next';
 import { compose } from 'recompose';
-import FullHeight from '../../FullHeight';
+import FullHeight from '../../../common/FullHeight';
 
 import Basic from './basic';
 import General from './general';

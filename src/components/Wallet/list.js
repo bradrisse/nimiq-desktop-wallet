@@ -5,11 +5,11 @@ import List, { ListItem, ListItemText } from 'material-ui/List';
 import Avatar from 'material-ui/Avatar';
 import {connect} from "react-redux";
 import {bindActionCreators} from "redux";
-import {actions as nimiqActions} from "../ducks/nimiq";
-import Iqon from '../iqon';
-import FullHeight from '../FullHeight';
+import {actions as nimiqActions} from "../../ducks/nimiq";
+import Iqon from '../../common/iqon';
+import FullHeight from '../../common/FullHeight';
 import { translate } from 'react-i18next';
-import CreateWallet from './Create';
+import AddWallet from './Add';
 import { compose } from 'recompose';
 
 const styles = theme => ({
@@ -58,7 +58,7 @@ class WalletList extends React.Component {
                         ))}
                     </List>
                 </FullHeight>
-                <CreateWallet/>
+                <AddWallet/>
             </div>
         );
     }

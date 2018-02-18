@@ -2,8 +2,8 @@ import React from "react";
 import Typography from 'material-ui/Typography';
 import { translate } from 'react-i18next';
 
-import FullHeight from '../FullHeight';
-import Centered from '../Centered';
+import FullHeight from '../FullHeight/index';
+import Centered from '../Centered/index';
 
 class Empty extends React.Component {
 

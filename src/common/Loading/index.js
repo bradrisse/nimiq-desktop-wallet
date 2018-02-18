@@ -2,9 +2,9 @@ import React from "react";
 import {withStyles} from "material-ui/styles";
 import {connect} from "react-redux";
 import Typography from 'material-ui/Typography';
-import FullHeight from '../FullHeight';
+import FullHeight from '../FullHeight/index';
 import { translate } from 'react-i18next';
-import Centered from '../Centered';
+import Centered from '../Centered/index';
 import { compose } from 'recompose';
 
 const styles = theme => ({

@@ -4,7 +4,7 @@ import { withStyles } from 'material-ui/styles';
 import Typography from 'material-ui/Typography';
 import {connect} from "react-redux";
 import {bindActionCreators} from "redux";
-import {actions as nimiqActions} from "../ducks/nimiq";
+import {actions as nimiqActions} from "../../ducks/nimiq";
 import Card, { CardContent } from 'material-ui/Card';
 import { FormControlLabel, FormGroup, FormControl } from 'material-ui/Form';
 import Switch from 'material-ui/Switch';

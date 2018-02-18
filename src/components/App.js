@@ -1,11 +1,12 @@
 import React from 'react';
 import {connect} from "react-redux";
 import {bindActionCreators} from "redux";
-import {actions as nimiqActions} from "./ducks/nimiq";
+import {actions as nimiqActions} from "../ducks/nimiq";
 import Drawer from './Drawer';
-import Loading from './Loading';
+import Loading from '../common/Loading';
 import Setup from './Setup';
-import FullHeight from './FullHeight';
+import Messages from './Messages';
+import FullHeight from '../common/FullHeight';
 import _ from 'lodash';
 import Dexie from 'dexie';
 import '../assets/css/App.css';
@@ -258,22 +259,61 @@ class App extends React.Component {
 
     _onTxsProcessed = () => {
         console.log('_onTxsProcessed >>>')
-        const {nimiq} = this.props;
-        if (nimiq.pendingTransaction) {
-            nimiq.pendingTransaction.hash().then(hash => {
-                if (!$.mempool.getTransaction(hash)) {
-                    this._pendingTransactionConfirmed();
-                }
-            });
-        }
+        // const {nimiq} = this.props;
+        // if (nimiq.pendingTransaction) {
+        //     nimiq.pendingTransaction.hash().then(hash => {
+        //         if (!$.mempool.getTransaction(hash)) {
+        //             this._pendingTransactionConfirmed();
+        //         }
+        //     });
+        // }
+        //
+        // if (nimiq.receivingTransaction) {
+        //     nimiq.receivingTransaction.hash().then(hash => {
+        //         if (!$.mempool.getTransaction(hash)) {
+        //             this._receivingTransactionConfirmed();
+        //         }
+        //     });
+        // }
+    };
 
-        if (nimiq.receivingTransaction) {
-            nimiq.receivingTransaction.hash().then(hash => {
-                if (!$.mempool.getTransaction(hash)) {
-                    this._receivingTransactionConfirmed();
-                }
-            });
-        }
+    _onTxReceived = tx => {
+        const {nimiq, nimiqActions} = this.props;
+        console.log('_onTxReceived >>> ', tx);
+
+        let _walletsArr = [];
+        _.each(nimiq.wallets, (_wallet) => {
+            _walletsArr.push(_wallet._wlt._address.toUserFriendlyAddress())
+        })
+        console.log('_walletsArr ', _walletsArr)
+        console.log('tx.recipient.toUserFriendlyAddress() ', tx.recipient.toUserFriendlyAddress())
+        console.log('_walletsArr.indexOf(tx.recipient.toUserFriendlyAddress()) ', _walletsArr.indexOf(tx.recipient.toUserFriendlyAddress()))
+        if (!(_walletsArr.indexOf(tx.recipient.toUserFriendlyAddress()) >= 0)) return;
+
+        console.log('push message')
+        nimiqActions.addMessage({
+            text: 'Nimiq received'
+        })
+        // if (_receivingInterval) {
+        //     clearInterval(_receivingInterval);
+        // }
+        //
+        // this.setState({
+        //     isReceiving: true,
+        //     receivingTransaction: tx
+        // })
+        //
+        // this._getEstimatedTime(function (_estimatedTime) {
+        //     self.setState({
+        //         estimatedTime: _estimatedTime
+        //     })
+        // });
+        //
+        // _receivingInterval = setInterval(() => {
+        //     this.setState({
+        //         elapsedTime: this.state.elapsedTime += 1
+        //     })
+        // }, 1000);
     };
 
     startMiner = (address) => {
@@ -414,6 +454,9 @@ class App extends React.Component {
                     $.blockchain.on("head-changed", () => this._onHeadChanged());
                     $.network.on("peers-changed", () => this._onPeersChanged());
 
+                    $.mempool.on("transaction-added", tx => self._onTxReceived(tx));
+                    $.mempool.on("transactions-ready", () => self._onTxsProcessed());
+
                     resolve($);
                 });
             }, function (code) {
@@ -436,6 +479,7 @@ class App extends React.Component {
         const {nimiq} = this.props
         return (
             <FullHeight>
+                <Messages />
                 {!nimiq.isConsensusEstablished && <Loading/>}
                 {nimiq.isConsensusEstablished && !nimiq.setupComplete && <Setup/>}
                 {nimiq.isConsensusEstablished && nimiq.setupComplete && <Drawer/>}

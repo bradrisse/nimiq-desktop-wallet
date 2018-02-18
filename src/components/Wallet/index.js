@@ -13,7 +13,7 @@ import Settings from './settings';
 import Receive from './receive';
 import Transactions from '../Transactions';
 import Paper from 'material-ui/Paper';
-import FullHeight from '../FullHeight';
+import FullHeight from '../../common/FullHeight';
 import { compose } from 'recompose';
 
 import SummaryIcon from 'material-ui-icons/Assessment';

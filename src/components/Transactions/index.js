@@ -7,7 +7,7 @@ import Avatar from 'material-ui/Avatar';
 import ReceivingIcon from 'material-ui-icons/FileDownload';
 import SendingIcon from 'material-ui-icons/FileUpload';
 import TransactionModal from '../Transactions/transactionModal';
-import Empty from '../Empty';
+import Empty from '../../common/Empty';
 import _ from 'lodash';
 
 const styles = theme => ({
