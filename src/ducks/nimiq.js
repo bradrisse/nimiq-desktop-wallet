@@ -31,7 +31,8 @@ export const types = {
     SET_MINING_WALLET: "SET_MINING_WALLET",
     UPDATE_AVERAGE_BLOCKTIME: "UPDATE_AVERAGE_BLOCKTIME",
     UPDATE_LAST_BLOCKTIME: "UPDATE_LAST_BLOCKTIME",
-    ADD_MINED_BLOCK: "ADD_MINED_BLOCK"
+    ADD_MINED_BLOCK: "ADD_MINED_BLOCK",
+    ADD_NIM: "ADD_NIM"
 };
 
 export const initial = {
@@ -179,12 +180,28 @@ export default function (state = initial, action) {
 
 
             return {...state, wallets: _wallets3}
+        case `${types.ADD_NIM}`:
+            var _wallets4 = state.wallets;
+
+            var existingWallet3 = _.find(_wallets4, (wallet) => {
+                return wallet.address === action.payload.addr
+            })
+
+            if (existingWallet3) {
+                existingWallet3.balance += action.payload.nim
+            }
+
+            return {...state, wallets: _wallets4}
         default:
             return state;
     }
 }
 
 export const actions = {
+    addNim: data => ({
+        type: types.ADD_NIM,
+        payload: data
+    }),
     addMinedBlock: data => ({
         type: types.ADD_MINED_BLOCK,
         payload: data

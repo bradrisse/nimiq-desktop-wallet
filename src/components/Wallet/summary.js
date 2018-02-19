@@ -35,6 +35,9 @@ class Summary extends React.Component {
                             <Typography component="p">
                                 Number of transactions: {nimiq.selectedWallet.transactions.length}
                             </Typography>
+                            <Typography component="p">
+                                Number of blocks mined: {nimiq.selectedWallet.minedBlocks.length}
+                            </Typography>
                         </CardContent>
                     </Card>
                     <FullHeight scroll subtract={270}>

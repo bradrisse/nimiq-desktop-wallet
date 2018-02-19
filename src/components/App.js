@@ -267,6 +267,9 @@ class App extends React.Component {
        if (!(_walletsArr.indexOf(block.minerAddr.toUserFriendlyAddress()) >= 0)) return;
 
        this.props.nimiqActions.addMinedBlock({height: block.height, addr: block.minerAddr.toUserFriendlyAddress()})
+
+        const txFees = block.body.transactions.reduce((sum, tx) => sum + tx.fee, 0);
+       this.props.nimiqActions.addNim({nim: Nimiq.Policy.satoshisToCoins(txFees + Nimiq.Policy.blockRewardAt(block.height)), addr: block.minerAddr.toUserFriendlyAddress()})
     };
 
     _onHashrateChanged() {
