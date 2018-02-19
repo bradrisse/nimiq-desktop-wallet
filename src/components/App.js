@@ -9,6 +9,7 @@ import Messages from './Messages';
 import FullHeight from '../common/FullHeight';
 import _ from 'lodash';
 import Dexie from 'dexie';
+import moment from 'moment';
 import '../assets/css/App.css';
 
 
@@ -244,11 +245,15 @@ class App extends React.Component {
     };
 
     _onMinerStarted = () => {
+        window.localStorage.setItem('upTime', JSON.stringify({start: moment().unix(), end: null}))
         this.props.nimiqActions.updateMessage("");
         this.props.nimiqActions.toggleMining(true);
     };
 
     _onMinerStopped = () => {
+        var upTime = JSON.parse(window.localStorage.getItem('upTime'));
+        upTime.end = moment().unix();
+        window.localStorage.setItem('upTime', JSON.stringify(upTime))
         this.props.nimiqActions.toggleMining(false);
     };
 

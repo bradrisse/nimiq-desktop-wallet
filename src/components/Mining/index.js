@@ -15,6 +15,8 @@ import Select from 'material-ui/Select';
 import { MenuItem } from 'material-ui/Menu';
 import TextField from 'material-ui/TextField';
 import { compose } from 'recompose';
+import moment from 'moment';
+import 'moment-duration-format';
 
 const styles = theme => ({
     card: {
@@ -39,11 +41,18 @@ const styles = theme => ({
     }
 });
 
+var countUpInterval;
+
 class Mining extends React.Component {
 
     state = {
         checkedA: true,
-        miningWallet: null
+        miningWallet: null,
+        upTime: {
+            start: null,
+            end: null
+        },
+        countUp: null
     }
 
     componentWillMount() {
@@ -60,10 +69,47 @@ class Mining extends React.Component {
                 this.setMiningWallet(nimiq.wallets[0].address)
             })
         }
+
+        this.checkUpTime()
+    }
+
+    checkUpTime = () => {
+        console.log('checkUpTime >>>')
+        var _upTime = JSON.parse(window.localStorage.getItem('upTime'))
+        if (_upTime) {
+            console.log('_upTime ', _upTime)
+            this.setState({
+                upTime: _upTime
+            }, () => {
+                if (_upTime.start && !_upTime.end) {
+                    this.startCountUp()
+                }
+            })
+        }
+    }
+
+    startCountUp = () => {
+        if (!countUpInterval) {
+            countUpInterval = setInterval(() => {
+                console.log((moment().unix() - this.state.upTime.start))
+                this.setState({
+                    countUp: moment.duration((moment().unix() - this.state.upTime.start), "seconds").format("h [hrs], m [min], s [sec]")
+                })
+            }, 1000)
+        }
     }
 
     toggleMining = (checked) => {
         this.props.nimiqActions.toggleMining(checked);
+
+        if (!checked) {
+           clearInterval(countUpInterval)
+           countUpInterval = '';
+        }
+
+        setTimeout(() => {
+            this.checkUpTime()
+        }, 1000)
     }
 
     handleMiningWalletChange = (e) => {
@@ -86,7 +132,7 @@ class Mining extends React.Component {
 
     render() {
         const { nimiq, classes, t } = this.props;
-        const {miningWallet} = this.state;
+        const {miningWallet, upTime, countUp} = this.state;
         return (
             <div style={{padding: 30}}>
                 <Typography variant="headline" component="h2" style={{marginBottom: 15, float: 'left'}}>
@@ -186,9 +232,9 @@ class Mining extends React.Component {
                             <CardContent>
                                 <Typography className={classes.title}>{t('mining.estimatedBlocks')}</Typography>
                                 <Typography variant="headline" component="h2">
-                                    2 per day
+                                    {((60 * 60 * 24) / nimiq.expectedBlockReward).toFixed(2)} per day
                                 </Typography>
-                                <Typography className={classes.pos}>60 per month</Typography>
+                                <Typography className={classes.pos}>{((60 * 60 * 24 * 30) / nimiq.expectedBlockReward).toFixed(2)} per month</Typography>
                             </CardContent>
                         </Card>
                     </Grid>
@@ -197,9 +243,9 @@ class Mining extends React.Component {
                             <CardContent>
                                 <Typography className={classes.title}>{t('mining.upTime')}</Typography>
                                 <Typography variant="headline" component="h2">
-                                    5 hr 10 min 29 sec
+                                    {countUp}
                                 </Typography>
-                                <Typography className={classes.pos}>Since: 22 February 2018</Typography>
+                                <Typography className={classes.pos}>Since: {moment.unix(upTime.start).format('MMMM Do YYYY, h:mm:ss a')}</Typography>
                             </CardContent>
                         </Card>
                     </Grid>
