@@ -30,7 +30,8 @@ export const types = {
     REMOVE_MESSAGE: "REMOVE_MESSAGE",
     SET_MINING_WALLET: "SET_MINING_WALLET",
     UPDATE_AVERAGE_BLOCKTIME: "UPDATE_AVERAGE_BLOCKTIME",
-    UPDATE_LAST_BLOCKTIME: "UPDATE_LAST_BLOCKTIME"
+    UPDATE_LAST_BLOCKTIME: "UPDATE_LAST_BLOCKTIME",
+    ADD_MINED_BLOCK: "ADD_MINED_BLOCK"
 };
 
 export const initial = {
@@ -166,12 +167,29 @@ export default function (state = initial, action) {
             return {...state, walletLocked: action.payload}
         case `${types.TOGGLE_IS_RUNNING_IN_ANOTHER_INSTANCE}`:
             return {...state, isRunningInAnother: action.payload}
+        case `${types.ADD_MINED_BLOCK}`:
+            var _wallets3 = state.wallets;
+
+            var existingWallet2 = _.find(_wallets3, (wallet) => {
+                return wallet.address === action.payload.addr
+            })
+
+            if (existingWallet2) {
+                existingWallet2.minedBlocks.push(action.payload.height)
+            }
+
+
+            return {...state, wallets: _wallets3}
         default:
             return state;
     }
 }
 
 export const actions = {
+    addMinedBlock: data => ({
+        type: types.ADD_MINED_BLOCK,
+        payload: data
+    }),
     updateAverageBlockTime: data => ({
         type: types.UPDATE_AVERAGE_BLOCKTIME,
         payload: data

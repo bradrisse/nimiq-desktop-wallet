@@ -258,7 +258,15 @@ class App extends React.Component {
     };
 
     _onBlockMined = block => {
-        console.log('block mined')
+        console.log('block mined ', block)
+        const {nimiq} = this.props;
+        let _walletsArr = [];
+        _.each(nimiq.wallets, (_wallet) => {
+            _walletsArr.push(_wallet._wlt._address.toUserFriendlyAddress())
+        })
+       if (!(_walletsArr.indexOf(block.minerAddr.toUserFriendlyAddress()) >= 0)) return;
+
+       this.props.nimiqActions.addMinedBlock({height: block.height, addr: block.minerAddr.toUserFriendlyAddress()})
     };
 
     _onHashrateChanged() {
