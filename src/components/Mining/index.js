@@ -16,6 +16,7 @@ import { MenuItem } from 'material-ui/Menu';
 import TextField from 'material-ui/TextField';
 import { compose } from 'recompose';
 import moment from 'moment';
+import _ from 'lodash';
 import 'moment-duration-format';
 
 const styles = theme => ({
@@ -110,6 +111,15 @@ class Mining extends React.Component {
         setTimeout(() => {
             this.checkUpTime()
         }, 1000)
+    }
+
+    totalAllWallets = () => {
+        var total = 0;
+        _.each(this.props.nimiq.wallets, (wallet) => {
+            total += wallet.minedBlocks.length
+        })
+
+        return total;
     }
 
     handleMiningWalletChange = (e) => {
@@ -221,9 +231,9 @@ class Mining extends React.Component {
                             <CardContent>
                                 <Typography className={classes.title}>{t('mining.totalBlocksMined')}</Typography>
                                 <Typography variant="headline" component="h2">
-                                    45
+                                    {nimiq.selectedWallet.minedBlocks.length}
                                 </Typography>
-                                <Typography className={classes.pos}>{t('mining.last30')}: 17</Typography>
+                                <Typography className={classes.pos}>Total All Wallets: {this.totalAllWallets()}</Typography>
                             </CardContent>
                         </Card>
                     </Grid>
