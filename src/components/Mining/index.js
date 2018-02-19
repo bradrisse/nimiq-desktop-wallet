@@ -151,9 +151,9 @@ class Mining extends React.Component {
                             <CardContent>
                                 <Typography className={classes.title}>{t('mining.lastBlockTime')}</Typography>
                                 <Typography variant="headline" component="h2">
-                                    1min 30sec
+                                    {nimiq.lastBlockTime}
                                 </Typography>
-                                <Typography className={classes.pos}>{t('mining.average')}: 23 seconds</Typography>
+                                <Typography className={classes.pos}>{t('mining.average')}: {nimiq.averageBlockTime}</Typography>
                             </CardContent>
                         </Card>
                     </Grid>

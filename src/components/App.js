@@ -161,7 +161,7 @@ class App extends React.Component {
 
     _onHeadChanged = () => {
         const height = $.blockchain.height;
-        console.log('head changed ', $.blockchain)
+        console.log('head changed ', height);
         db.blocks.add({
             blockHeight: height,
             minerAddr: $.blockchain.head.body.minerAddr.toUserFriendlyAddress()
@@ -171,8 +171,31 @@ class App extends React.Component {
         //     hashRate: this._setHashrate($.miner.hashrate),
         //     globalHashRate: globalHashRate
         // });
+        this._updateAverageBlockTime();
         this.props.nimiqActions.updateBlockHeight(height);
-    };
+    }
+
+    _updateAverageBlockTime() {
+        let self = this;
+        const head = $.blockchain.head;
+        const tailHeight = Math.max(head.height - Nimiq.Policy.DIFFICULTY_BLOCK_WINDOW, 1);
+
+        $.blockchain.getBlockAt(tailHeight).then(tailBlock => {
+            let averageBlockTime;
+            if (tailBlock) {
+                averageBlockTime =
+                    (head.timestamp - tailBlock.timestamp) / (Math.max(head.height - tailBlock.height, 1));
+            } else {
+                averageBlockTime = 'unknown';
+            }
+            self.props.nimiqActions.updateAverageBlockTime(averageBlockTime.toFixed(2) + 's')
+        });
+
+        $.blockchain.getBlock(head.prevHash).then(prevBlock => {
+            var lastBlockTime = (prevBlock ? (head.timestamp - prevBlock.timestamp) : 0).toFixed(2) + 's';
+            self.props.nimiqActions.updateLastBlockTime(lastBlockTime)
+        });
+    }
 
     _getGlobalHashrate = (raw = false) => {
         const nBits = $.blockchain.head.header.nBits;

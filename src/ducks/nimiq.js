@@ -28,7 +28,9 @@ export const types = {
     COMPLETE_SETUP: "COMPLETE_SETUP",
     ADD_MESSAGE: "ADD_MESSAGE",
     REMOVE_MESSAGE: "REMOVE_MESSAGE",
-    SET_MINING_WALLET: "SET_MINING_WALLET"
+    SET_MINING_WALLET: "SET_MINING_WALLET",
+    UPDATE_AVERAGE_BLOCKTIME: "UPDATE_AVERAGE_BLOCKTIME",
+    UPDATE_LAST_BLOCKTIME: "UPDATE_LAST_BLOCKTIME"
 };
 
 export const initial = {
@@ -62,7 +64,9 @@ export const initial = {
     miningWallet: null,
     setupComplete: false,
     messages: [],
-    miningWallet: null
+    miningWallet: null,
+    averageBlockTime: null,
+    lastBockTime: null
 };
 
 export default function (state = initial, action) {
@@ -73,6 +77,10 @@ export default function (state = initial, action) {
             return {...state, peers: action.payload};
         case `${types.SET_MINING_WALLET}`:
             return {...state, miningWallet: action.payload};
+        case `${types.UPDATE_AVERAGE_BLOCKTIME}`:
+            return {...state, averageBlockTime: action.payload};
+        case `${types.UPDATE_LAST_BLOCKTIME}`:
+            return {...state, lastBlockTime: action.payload};
         case `${types.ADD_ADDRESS}`:
             return {...state, address: action.payload};
         case `${types.ADD_MESSAGE}`:
@@ -164,6 +172,14 @@ export default function (state = initial, action) {
 }
 
 export const actions = {
+    updateAverageBlockTime: data => ({
+        type: types.UPDATE_AVERAGE_BLOCKTIME,
+        payload: data
+    }),
+    updateLastBlockTime: data => ({
+        type: types.UPDATE_LAST_BLOCKTIME,
+        payload: data
+    }),
     setMiningWallet: data => ({
         type: types.SET_MINING_WALLET,
         payload: data
