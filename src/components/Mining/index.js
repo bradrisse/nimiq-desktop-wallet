@@ -162,9 +162,9 @@ class Mining extends React.Component {
                             <CardContent>
                                 <Typography className={classes.title}>Peers</Typography>
                                 <Typography variant="headline" component="h2">
-                                    {nimiq.peers}
+                                    {nimiq.peers.total}
                                 </Typography>
-                                <Typography className={classes.pos}>3 {t('mining.nodes')} / 2 {t('mining.clients')}</Typography>
+                                <Typography className={classes.pos}>{nimiq.peers.ws} {t('mining.nodes')} / {nimiq.peers.rtc} {t('mining.clients')}</Typography>
                             </CardContent>
                         </Card>
                     </Grid>

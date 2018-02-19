@@ -213,7 +213,11 @@ class App extends React.Component {
     }
 
     _onPeersChanged = () => {
-        this.props.nimiqActions.updatePeers($.network.peerCount);
+        this.props.nimiqActions.updatePeers({
+            total: $.network.peerCount,
+            ws: $.network.peerCountWebSocket,
+            rtc: $.network.peerCountWebRtc
+        });
     };
 
     _onMinerStarted = () => {
