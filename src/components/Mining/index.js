@@ -56,6 +56,12 @@ class Mining extends React.Component {
         countUp: null
     }
 
+    componentWillReceiveProps(nextProps) {
+        if (nextProps.nimiq.wallets !== this.props.nimiq.miningWallet) {
+            this.miningWalletTotal()
+        }
+    }
+
     componentWillMount() {
         const { nimiq } = this.props;
         const miningWallet = JSON.parse(localStorage.getItem('miningWallet'))
@@ -120,6 +126,27 @@ class Mining extends React.Component {
         })
 
         return total;
+    }
+
+    miningWalletTotal = () => {
+        var _miningWallet = this.props.nimiq.miningWallet || JSON.parse(localStorage.getItem('miningWallet'));
+        console.log('_miningWallet ', _miningWallet)
+        if (_miningWallet) {
+            var miningWallet = _.find(this.props.nimiq.wallets, (wallet) => {
+                console.log(wallet.address, _miningWallet)
+                return wallet.address === _miningWallet
+            })
+
+            console.log('miningWallet ', miningWallet)
+
+            if (miningWallet) {
+                return miningWallet.minedBlocks.length
+            } else {
+                return 0
+            }
+        } else {
+            return 0
+        }
     }
 
     handleMiningWalletChange = (e) => {
@@ -231,7 +258,7 @@ class Mining extends React.Component {
                             <CardContent>
                                 <Typography className={classes.title}>{t('mining.totalBlocksMined')}</Typography>
                                 <Typography variant="headline" component="h2">
-                                    {nimiq.selectedWallet.minedBlocks.length}
+                                    {this.miningWalletTotal()}
                                 </Typography>
                                 <Typography className={classes.pos}>Total All Wallets: {this.totalAllWallets()}</Typography>
                             </CardContent>

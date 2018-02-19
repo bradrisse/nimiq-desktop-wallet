@@ -132,7 +132,8 @@ class PersonalWallet extends React.Component {
                 _wlt: wlt,
                 address: wlt.address.toUserFriendlyAddress(),
                 balance: 0,
-                transactions: []
+                transactions: [],
+                minedBlocks: []
             }
             this.props.nimiqActions.addWallet(_newWallet)
         })

@@ -65,7 +65,6 @@ export const initial = {
     miningWallet: null,
     setupComplete: false,
     messages: [],
-    miningWallet: null,
     averageBlockTime: null,
     lastBockTime: null
 };
