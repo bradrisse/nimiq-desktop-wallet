@@ -27,7 +27,8 @@ export const types = {
     REMOVE_WALLET: "REMOVE_WALLET",
     COMPLETE_SETUP: "COMPLETE_SETUP",
     ADD_MESSAGE: "ADD_MESSAGE",
-    REMOVE_MESSAGE: "REMOVE_MESSAGE"
+    REMOVE_MESSAGE: "REMOVE_MESSAGE",
+    SET_MINING_WALLET: "SET_MINING_WALLET"
 };
 
 export const initial = {
@@ -60,7 +61,8 @@ export const initial = {
     selectedWallet: null,
     miningWallet: null,
     setupComplete: false,
-    messages: []
+    messages: [],
+    miningWallet: null
 };
 
 export default function (state = initial, action) {
@@ -69,6 +71,8 @@ export default function (state = initial, action) {
             return {...state, hashRate: action.payload['hashRate'], globalHashRate: action.payload['globalHashRate']};
         case `${types.UPDATE_PEERS}`:
             return {...state, peers: action.payload};
+        case `${types.SET_MINING_WALLET}`:
+            return {...state, miningWallet: action.payload};
         case `${types.ADD_ADDRESS}`:
             return {...state, address: action.payload};
         case `${types.ADD_MESSAGE}`:
@@ -160,6 +164,10 @@ export default function (state = initial, action) {
 }
 
 export const actions = {
+    setMiningWallet: data => ({
+        type: types.SET_MINING_WALLET,
+        payload: data
+    }),
     addMessage: data => ({
         type: types.ADD_MESSAGE,
         payload: data

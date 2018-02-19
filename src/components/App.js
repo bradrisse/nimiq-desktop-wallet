@@ -90,6 +90,10 @@ class App extends React.Component {
             $.miner.threads = nextProps.nimiq.threadCount
         }
 
+        if (nextProps.nimiq.miningWallet !== this.props.nimiq.miningWallet) {
+            this.startMiner(nextProps.nimiq.miningWallet)
+        }
+
         if (nextProps.nimiq.isMining !== this.props.nimiq.isMining) {
             if (nextProps.nimiq.isMining) {
                 $.miner.startWork();
@@ -102,7 +106,7 @@ class App extends React.Component {
     }
 
     _onConsensusEstablished() {
-        const {nimiqActions} = this.props;
+        const {nimiqActions, nimiq} = this.props;
         console.log("Consensus Established...");
         nimiqActions.updateMessage("Consensus Established...");
         nimiqActions.updateConsensus(true);
@@ -113,15 +117,30 @@ class App extends React.Component {
         this.props.nimiqActions.updateBlockHeight($.blockchain.height);
         nimiqActions.updateBlockReward(window.Nimiq.Policy.blockRewardAt($.blockchain.height));
 
-        // $.walletStore.hasDefault().then(hasDefault => {
-        //     if (hasDefault) {
-        //         $.walletStore.getDefault().then(defaultWallet => {
-        //             this.startMiner(defaultWallet.address)
-        //         });
-        //     } else {
-        //         this._addWallet();
-        //     }
-        // });
+        $.walletStore.hasDefault().then(hasDefault => {
+            console.log('hasDefault ', hasDefault)
+            if (!hasDefault && nimiq.wallets.length > 0) {
+                $.walletStore.setDefault(nimiq.wallets[0]._wlt.address).then(() => {
+                    if (!localStorage.getItem('miningWallet')) {
+                        this.startMiner(nimiq.wallets[0]._wlt.address)
+                    } else {
+                        var _address = Nimiq.Address.fromUserFriendlyAddress(JSON.parse(localStorage.getItem('miningWallet')))
+                        this.startMiner(_address)
+                    }
+                })
+            }
+
+            if (hasDefault) {
+                $.walletStore.getDefault().then((defaultWallet) => {
+                    if (!localStorage.getItem('miningWallet')) {
+                        this.startMiner(nimiq.wallets[0]._wlt.address)
+                    } else {
+                        var _address = Nimiq.Address.fromUserFriendlyAddress(JSON.parse(localStorage.getItem('miningWallet')))
+                        this.startMiner(_address)
+                    }
+                })
+            }
+        });
     }
 
     _updateBalance = () => {
@@ -317,6 +336,7 @@ class App extends React.Component {
     };
 
     startMiner = (address) => {
+        console.log('startMiner ', address)
         $.miner = new Nimiq.Miner($.blockchain, $.accounts, $.mempool, $.network.time, address);
         if (window.localStorage.getItem("threadCount")) {
             this.props.nimiqActions.updateThreadCount(window.localStorage.getItem("threadCount"));
@@ -348,7 +368,6 @@ class App extends React.Component {
                 }
                 return Promise.resolve();
             })
-            .then(() => this.startMiner(wallet.address));
     }
 
     setAddresses = (addresses) => {

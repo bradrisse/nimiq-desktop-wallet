@@ -75,6 +75,8 @@ class Mining extends React.Component {
     }
 
     setMiningWallet (address) {
+        this.toggleMining(false)
+        this.props.nimiqActions.setMiningWallet(Nimiq.Address.fromUserFriendlyAddress(address))
         localStorage.setItem('miningWallet', JSON.stringify(address))
     }
 
