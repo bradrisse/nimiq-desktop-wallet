@@ -32,7 +32,10 @@ export const types = {
     UPDATE_AVERAGE_BLOCKTIME: "UPDATE_AVERAGE_BLOCKTIME",
     UPDATE_LAST_BLOCKTIME: "UPDATE_LAST_BLOCKTIME",
     ADD_MINED_BLOCK: "ADD_MINED_BLOCK",
-    ADD_NIM: "ADD_NIM"
+    ADD_NIM: "ADD_NIM",
+    ADD_TRANSACTION: "ADD_TRANSACTION",
+    UPDATE_PENDING_TRANSACTION: "UPDATE_PENDING_TRANSACTION",
+    UPDATE_RECIEVING_TRANSACTION: "UPDATE_RECIEVING_TRANSACTION"
 };
 
 export const initial = {
@@ -67,7 +70,9 @@ export const initial = {
     setupComplete: false,
     messages: [],
     averageBlockTime: null,
-    lastBockTime: null
+    lastBockTime: null,
+    pendingTransaction: null,
+    receivingTransaction: null
 };
 
 export default function (state = initial, action) {
@@ -123,6 +128,10 @@ export default function (state = initial, action) {
             return {...state, blockReward: action.payload}
         case `${types.UPDATE_MESSAGE}`:
             return {...state, message: action.payload}
+        case `${types.UPDATE_PENDING_TRANSACTION}`:
+            return {...state, pendingTransaction: action.payload}
+        case `${types.UPDATE_RECIEVING_TRANSACTION}`:
+            return {...state, receivingTransaction: action.payload}
         case `${types.CREATE_WALLET}`:
             return {...state, walletCreated: true, pin: action.payload}
         case `${types.CLEAR_VOLATILE}`:
@@ -192,12 +201,49 @@ export default function (state = initial, action) {
             }
 
             return {...state, wallets: _wallets4}
+        case `${types.ADD_TRANSACTION}`:
+            console.log('ADD_TRANSACTION >>>')
+            var _wallets5 = state.wallets;
+
+            var existingWallet3 = _.find(_wallets5, (wallet) => {
+                return wallet.address === action.payload.recipient
+            })
+
+            if (existingWallet3) {
+                console.log('action.payload ', action.payload)
+                existingWallet3.transactions.push(action.payload);
+                existingWallet3.balance += action.payload.value;
+            }
+
+            var existingWallet4 = _.find(_wallets5, (wallet) => {
+                return wallet.address === action.payload.sender
+            })
+
+            if (existingWallet4) {
+                existingWallet4.transactions.push(action.payload);
+                existingWallet4.balance -= (action.payload.value + action.payload.fee);
+            }
+
+
+            return {...state, wallets: _wallets5}
         default:
             return state;
     }
 }
 
 export const actions = {
+    updatePendingTransaction: data => ({
+        type: types.UPDATE_PENDING_TRANSACTION,
+        payload: data
+    }),
+    updateReceivingTransaction: data => ({
+        type: types.UPDATE_RECIEVING_TRANSACTION,
+        payload: data
+    }),
+    addTransaction: data => ({
+        type: types.ADD_TRANSACTION,
+        payload: data
+    }),
     addNim: data => ({
         type: types.ADD_NIM,
         payload: data

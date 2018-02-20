@@ -108,7 +108,6 @@ class App extends React.Component {
 
     _onConsensusEstablished() {
         const {nimiqActions, nimiq} = this.props;
-        console.log("Consensus Established...");
         nimiqActions.updateMessage("Consensus Established...");
         nimiqActions.updateConsensus(true);
         //nimiqActions.updateAddress($.wallet.address.toUserFriendlyAddress());
@@ -119,7 +118,6 @@ class App extends React.Component {
         nimiqActions.updateBlockReward(window.Nimiq.Policy.blockRewardAt($.blockchain.height));
 
         $.walletStore.hasDefault().then(hasDefault => {
-            console.log('hasDefault ', hasDefault)
             if (!hasDefault && nimiq.wallets.length > 0) {
                 $.walletStore.setDefault(nimiq.wallets[0]._wlt.address).then(() => {
                     if (!localStorage.getItem('miningWallet')) {
@@ -162,7 +160,6 @@ class App extends React.Component {
 
     _onHeadChanged = () => {
         const height = $.blockchain.height;
-        console.log('head changed ', height);
         db.blocks.add({
             blockHeight: height,
             minerAddr: $.blockchain.head.body.minerAddr.toUserFriendlyAddress()
@@ -224,15 +221,30 @@ class App extends React.Component {
     }
 
     _pendingTransactionConfirmed = () => {
-        console.log('_pendingTransactionConfirmed >>> ')
-        if (_pendingInterval) {
-            clearInterval(_pendingInterval);
-        }
-        this.props.nimiqActions.updatePendingTransaction({tx: null, isSending: false});
-        this.props.nimiqActions.updateTransaction({estimatedTime: null});
+        // if (_pendingInterval) {
+        //     clearInterval(_pendingInterval);
+        // }
+        var transaction = this.props.nimiq.pendingTransaction;
+        this.props.nimiqActions.updatePendingTransaction(null);
+        //this.props.nimiqActions.updateTransaction({estimatedTime: null});
 
-        this.setState({
-            isSending: false
+        // this.setState({
+        //     isSending: false
+        // })
+
+        $.blockchain.getBlockAt(transaction._validityStartHeight).then((block) => {
+            var _recipient = transaction.recipient.toUserFriendlyAddress();
+            var _sender = transaction.sender.toUserFriendlyAddress();
+            this.props.nimiqActions.addTransaction({
+                sender: _sender,
+                recipient: _recipient,
+                value: Nimiq.Policy.satoshisToCoins(transaction.value),
+                fee: Nimiq.Policy.satoshisToCoins(transaction.fee),
+                data: Nimiq.BufferUtils.toHex(transaction.data),
+                blockHeight: block.height,
+                hash: transaction.hash().toHex(),
+                timestamp: block.timestamp
+            })
         })
     }
 
@@ -258,7 +270,6 @@ class App extends React.Component {
     };
 
     _onBlockMined = block => {
-        console.log('block mined ', block)
         const {nimiq} = this.props;
         let _walletsArr = [];
         _.each(nimiq.wallets, (_wallet) => {
@@ -292,7 +303,6 @@ class App extends React.Component {
     }
 
     _updateSyncProgress(state) {
-        console.log('_updateSyncProgress ', state)
         //if (!$.consensus.established) {
         var msg = "";
         switch (state) {
@@ -321,38 +331,51 @@ class App extends React.Component {
 
     _onTxsProcessed = () => {
         console.log('_onTxsProcessed >>>')
-        // const {nimiq} = this.props;
-        // if (nimiq.pendingTransaction) {
-        //     nimiq.pendingTransaction.hash().then(hash => {
-        //         if (!$.mempool.getTransaction(hash)) {
-        //             this._pendingTransactionConfirmed();
-        //         }
-        //     });
-        // }
-        //
-        // if (nimiq.receivingTransaction) {
-        //     nimiq.receivingTransaction.hash().then(hash => {
-        //         if (!$.mempool.getTransaction(hash)) {
-        //             this._receivingTransactionConfirmed();
-        //         }
-        //     });
-        // }
+        const {nimiq} = this.props;
+        if (nimiq.pendingTransaction) {
+            nimiq.pendingTransaction.hash().then(hash => {
+                if (!$.mempool.getTransaction(hash)) {
+                    this._pendingTransactionConfirmed();
+                }
+            });
+        }
+
+        if (nimiq.receivingTransaction) {
+            if (!$.mempool.getTransaction(nimiq.receivingTransaction._hash)) {
+                this._receivingTransactionConfirmed();
+            }
+        }
     };
+
+    _receivingTransactionConfirmed = () => {
+        var transaction = this.props.nimiq.receivingTransaction;
+        this.props.nimiqActions.updateReceivingTransaction(null)
+        $.blockchain.getBlockAt(transaction._validityStartHeight).then((block) => {
+            var _recipient = transaction.recipient.toUserFriendlyAddress();
+            var _sender = transaction.sender.toUserFriendlyAddress();
+            this.props.nimiqActions.addTransaction({
+                sender: _sender,
+                recipient: _recipient,
+                value: Nimiq.Policy.satoshisToCoins(transaction.value),
+                fee: Nimiq.Policy.satoshisToCoins(transaction.fee),
+                data: Nimiq.BufferUtils.toHex(transaction.data),
+                blockHeight: block.height,
+                hash: transaction.hash().toHex(),
+                timestamp: block.timestamp
+            })
+        })
+    }
 
     _onTxReceived = tx => {
         const {nimiq, nimiqActions} = this.props;
-        console.log('_onTxReceived >>> ', tx);
 
         let _walletsArr = [];
         _.each(nimiq.wallets, (_wallet) => {
             _walletsArr.push(_wallet._wlt._address.toUserFriendlyAddress())
         })
-        console.log('_walletsArr ', _walletsArr)
-        console.log('tx.recipient.toUserFriendlyAddress() ', tx.recipient.toUserFriendlyAddress())
-        console.log('_walletsArr.indexOf(tx.recipient.toUserFriendlyAddress()) ', _walletsArr.indexOf(tx.recipient.toUserFriendlyAddress()))
+
         if (!(_walletsArr.indexOf(tx.recipient.toUserFriendlyAddress()) >= 0)) return;
 
-        console.log('push message')
         nimiqActions.addMessage({
             text: 'Nimiq received'
         })
@@ -360,10 +383,7 @@ class App extends React.Component {
         //     clearInterval(_receivingInterval);
         // }
         //
-        // this.setState({
-        //     isReceiving: true,
-        //     receivingTransaction: tx
-        // })
+        this.props.nimiqActions.updateReceivingTransaction(tx)
         //
         // this._getEstimatedTime(function (_estimatedTime) {
         //     self.setState({
@@ -379,7 +399,6 @@ class App extends React.Component {
     };
 
     startMiner = (address) => {
-        console.log('startMiner ', address)
         $.miner = new Nimiq.Miner($.blockchain, $.accounts, $.mempool, $.network.time, address);
         if (window.localStorage.getItem("threadCount")) {
             this.props.nimiqActions.updateThreadCount(window.localStorage.getItem("threadCount"));
@@ -442,7 +461,6 @@ class App extends React.Component {
                             _.each(transactions, (transaction) => {
                                 $.consensus.blockchain.getBlock(transaction.blockHash).then((block) => {
                                     _.each(block.body.transactions, (transaction) => {
-                                        console.log('transaction ', transaction)
                                         var _recipient = transaction.recipient.toUserFriendlyAddress();
                                         var _sender = transaction.sender.toUserFriendlyAddress();
                                         var currentAddress = address.toUserFriendlyAddress();
@@ -461,10 +479,8 @@ class App extends React.Component {
                                     })
                                 })
                             })
-                            console.log('_account ', _account)
                             return _account;
                         } else {
-                            console.log('_account ', _account)
                             return _account;
                         }
                     })
@@ -502,7 +518,6 @@ class App extends React.Component {
                     $.network.connect();
 
                     $.walletStore.list().then(addresses => {
-                        console.log('addresses ', addresses)
                         this.setAddresses(addresses)
                     });
 

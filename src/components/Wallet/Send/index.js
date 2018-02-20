@@ -67,20 +67,16 @@ class Send extends React.Component {
     };
 
     sendBasicTransaction = (values) => {
-        console.log('wlt ', this.props.nimiq.selectedWallet._wlt)
         return new Nimiq.BasicTransaction(this.props.nimiq.selectedWallet._wlt.publicKey, Nimiq.Address.fromUserFriendlyAddress(values.receiver), Nimiq.Policy.coinsToSatoshis(values.amount), Nimiq.Policy.coinsToSatoshis(values.fee), window.$.blockchain.height)
     }
 
     sendGeneralTransaction(values) {
-        console.log('values ', values);
-        console.log('this.props.nimiq.selectedWallet._wlt ', this.props.nimiq.selectedWallet._wlt)
         // TODO: Get Account Types Dynamically
         const freeformData = Nimiq.BufferUtils.fromAscii(values.note);
         return new Nimiq.ExtendedTransaction(this.props.nimiq.selectedWallet._wlt.publicKey, Nimiq.Account.Type.BASIC, Nimiq.Address.fromUserFriendlyAddress(values.receiver), Nimiq.Account.Type.BASIC, Nimiq.Policy.coinsToSatoshis(values.amount), Nimiq.Policy.coinsToSatoshis(values.fee), window.$.blockchain.height, Nimiq.Transaction.Flag.NONE, freeformData);
     }
 
     handleBasicTransaction = (values) => {
-        console.log('handleBasicTransaction ', values)
         let tx;
         switch (this.state.transactionType) {
             case 'basic':
@@ -94,12 +90,11 @@ class Send extends React.Component {
         const signResult = this.sign(tx);
         tx.signature = signResult.signature;
         tx.proof = signResult.proof;
-        console.log('pushing transaction ', tx)
-        window.$.mempool.pushTransaction(tx)
+        window.$.mempool.pushTransaction(tx);
+        this.props.nimiqActions.updatePendingTransaction(tx);
     }
 
     handleVestingTransaction = (values) => {
-        console.log('handleVestingTransaction ', values)
         const vestingOwner = values.owner;
         const vestingStepBlocks = parseFloat(values['step-blocks']);
         if ( vestingOwner === null || vestingStepBlocks === null) return null;
