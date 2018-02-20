@@ -75,7 +75,11 @@ export const initial = {
     receivingTransaction: null
 };
 
+
+
 export default function (state = initial, action) {
+    var _existingWallet, _existingWallet2, _selectedWallet, _wallets;
+
     switch (action.type) {
         case `${types.UPDATE_HASHRATE}`:
             return {...state, hashRate: action.payload['hashRate'], globalHashRate: action.payload['globalHashRate']};
@@ -143,30 +147,30 @@ export default function (state = initial, action) {
         case `${types.COMPLETE_SETUP}`:
             return {...state, setupComplete: action.payload}
         case `${types.ADD_WALLET}`:
-            var _wallets1 = state.wallets;
-            _wallets1.push(action.payload)
-            return {...state, wallets: _wallets1, selectedWallet: action.payload}
+            _wallets = state.wallets;
+            _wallets.push(action.payload)
+            return {...state, wallets: _wallets, selectedWallet: action.payload}
         case `${types.REMOVE_WALLET}`:
-            var _wallets2 = state.wallets;
-            var existingWallet = _.findIndex(_wallets2, (wallet) => {
+            _wallets = state.wallets;
+            _existingWallet = _.findIndex(_wallets, (wallet) => {
                 return wallet.address === action.payload
             })
-            if (existingWallet >= 0) {
-                _wallets2.splice(existingWallet, 1)
+            if (_existingWallet >= 0) {
+                _wallets.splice(_existingWallet, 1)
             }
-            var _selectedW = ((existingWallet - 1) > 0 ? (existingWallet - 1) : 0 );
-            if (_wallets2.length <= 0) {
-                _selectedW = null;
+            _selectedWallet = ((_existingWallet - 1) > 0 ? (_existingWallet - 1) : 0 );
+            if (_wallets.length <= 0) {
+                _selectedWallet = null;
             }
-            return {...state, wallets: _wallets2, selectedWallet: _selectedW}
+            return {...state, wallets: _wallets, selectedWallet: _selectedWallet}
         case `${types.SET_WALLET_NAME}`:
-            var _wallets = state.wallets;
-            var _selectedWallet = state.selectedWallet;
-            var existingWallet = _.find(_wallets, (wallet) => {
+            _wallets = state.wallets;
+            _selectedWallet = state.selectedWallet;
+            _existingWallet = _.find(_wallets, (wallet) => {
                 return wallet.address === action.payload.address
             })
-            if (existingWallet) {
-                existingWallet.name = action.payload.name
+            if (_existingWallet) {
+                _existingWallet.name = action.payload.name
             }
             if (_selectedWallet.address === action.payload.address) {
                 _selectedWallet.name = action.payload.name
@@ -177,55 +181,52 @@ export default function (state = initial, action) {
         case `${types.TOGGLE_IS_RUNNING_IN_ANOTHER_INSTANCE}`:
             return {...state, isRunningInAnother: action.payload}
         case `${types.ADD_MINED_BLOCK}`:
-            var _wallets3 = state.wallets;
+            _wallets = state.wallets;
 
-            var existingWallet2 = _.find(_wallets3, (wallet) => {
+            _existingWallet = _.find(_wallets, (wallet) => {
                 return wallet.address === action.payload.addr
             })
 
-            if (existingWallet2) {
-                existingWallet2.minedBlocks.push(action.payload.height)
+            if (_existingWallet) {
+                _existingWallet.minedBlocks.push(action.payload.height)
             }
 
-
-            return {...state, wallets: _wallets3}
+            return {...state, wallets: customFunction(action.payload, state)}
         case `${types.ADD_NIM}`:
-            var _wallets4 = state.wallets;
+            _wallets = state.wallets;
 
-            var existingWallet3 = _.find(_wallets4, (wallet) => {
+            _existingWallet = _.find(_wallets, (wallet) => {
                 return wallet.address === action.payload.addr
             })
 
-            if (existingWallet3) {
-                existingWallet3.balance += action.payload.nim
+            if (_existingWallet) {
+                _existingWallet.balance += action.payload.nim
             }
 
-            return {...state, wallets: _wallets4}
+            return {...state, wallets: _wallets}
         case `${types.ADD_TRANSACTION}`:
-            console.log('ADD_TRANSACTION >>>')
-            var _wallets5 = state.wallets;
+            _wallets = state.wallets;
 
-            var existingWallet3 = _.find(_wallets5, (wallet) => {
+            _existingWallet = _.find(_wallets, (wallet) => {
                 return wallet.address === action.payload.recipient
             })
 
-            if (existingWallet3) {
-                console.log('action.payload ', action.payload)
-                existingWallet3.transactions.push(action.payload);
-                existingWallet3.balance += action.payload.value;
+            if (_existingWallet) {
+                _existingWallet.transactions.push(action.payload);
+                _existingWallet.balance += action.payload.value;
             }
 
-            var existingWallet4 = _.find(_wallets5, (wallet) => {
+            _existingWallet2 = _.find(_wallets, (wallet) => {
                 return wallet.address === action.payload.sender
             })
 
-            if (existingWallet4) {
-                existingWallet4.transactions.push(action.payload);
-                existingWallet4.balance -= (action.payload.value + action.payload.fee);
+            if (_existingWallet2) {
+                _existingWallet2.transactions.push(action.payload);
+                _existingWallet2.balance -= (action.payload.value + action.payload.fee);
             }
 
 
-            return {...state, wallets: _wallets5}
+            return {...state, wallets: _wallets}
         default:
             return state;
     }
