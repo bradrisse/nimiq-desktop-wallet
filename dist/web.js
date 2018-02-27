@@ -2570,23 +2570,98 @@ class TreeTransaction {
 Class.register(TreeTransaction);
 
 class BufferUtils {
-     /**
+    static _codePointTextDecoder(u8) {
+        if (typeof TextDecoder === 'undefined') throw new Error('TextDecoder not supported');
+        if (BufferUtils._ISO_8859_15_DECODER === null) throw new Error('TextDecoder does not supprot iso-8859-15');
+        if (BufferUtils._ISO_8859_15_DECODER === undefined) {
+            try {
+                BufferUtils._ISO_8859_15_DECODER = new TextDecoder('iso-8859-15');
+            } finally {
+                BufferUtils._ISO_8859_15_DECODER = null;
+            }
+        }
+        return BufferUtils._ISO_8859_15_DECODER.decode(u8)
+            .replace('€', '¤').replace('Š', '¦').replace('š', '¨').replace('Ž', '´')
+            .replace('ž', '¸').replace('Œ', '¼').replace('œ', '½').replace('Ÿ', '¾');
+    }
+
+    static _tripletToBase64(num) {
+        return BufferUtils._BASE64_LOOKUP[num >> 18 & 0x3F] + BufferUtils._BASE64_LOOKUP[num >> 12 & 0x3F] + BufferUtils._BASE64_LOOKUP[num >> 6 & 0x3F] + BufferUtils._BASE64_LOOKUP[num & 0x3F];
+    }
+
+    static _base64encodeChunk(u8, start, end) {
+        let tmp;
+        const output = [];
+        for (let i = start; i < end; i += 3) {
+            tmp = ((u8[i] << 16) & 0xFF0000) + ((u8[i + 1] << 8) & 0xFF00) + (u8[i + 2] & 0xFF);
+            output.push(BufferUtils._tripletToBase64(tmp));
+        }
+        return output.join('');
+    }
+
+    static _base64fromByteArray(u8) {
+        let tmp;
+        const len = u8.length;
+        const extraBytes = len % 3; // if we have 1 byte left, pad 2 bytes
+        let output = '';
+        const parts = [];
+        const maxChunkLength = 16383; // must be multiple of 3
+
+        // go through the array every three bytes, we'll deal with trailing stuff later
+        for (let i = 0, len2 = len - extraBytes; i < len2; i += maxChunkLength) {
+            parts.push(BufferUtils._base64encodeChunk(u8, i, (i + maxChunkLength) > len2 ? len2 : (i + maxChunkLength)));
+        }
+
+        // pad the end with zeros, but make sure to not forget the extra bytes
+        if (extraBytes === 1) {
+            tmp = u8[len - 1];
+            output += BufferUtils._BASE64_LOOKUP[tmp >> 2];
+            output += BufferUtils._BASE64_LOOKUP[(tmp << 4) & 0x3F];
+            output += '==';
+        } else if (extraBytes === 2) {
+            tmp = (u8[len - 2] << 8) + (u8[len - 1]);
+            output += BufferUtils._BASE64_LOOKUP[tmp >> 10];
+            output += BufferUtils._BASE64_LOOKUP[(tmp >> 4) & 0x3F];
+            output += BufferUtils._BASE64_LOOKUP[(tmp << 2) & 0x3F];
+            output += '=';
+        }
+
+        parts.push(output);
+
+        return parts.join('');
+    }
+
+    /**
      * @param {*} buffer
      * @return {string}
      */
     static toBase64(buffer) {
-        return btoa(String.fromCharCode(...new Uint8Array(buffer)));
+        if (typeof Buffer !== 'undefined' && typeof window === 'undefined') {
+            return new Buffer(buffer).toString('base64');
+        } else if (typeof TextDecoder !== 'undefined' && BufferUtils._ISO_8859_15_DECODER !== null) {
+            try {
+                return btoa(BufferUtils._codePointTextDecoder(new Uint8Array(buffer)));
+            } catch (e) {
+                // Disabled itself
+            }
+        }
+
+        return BufferUtils._base64fromByteArray(new Uint8Array(buffer));
     }
 
     /**
      * @param {string} base64
-     * @return {SerialBuffer}
+     * @return {Uint8Array}
      */
     static fromBase64(base64) {
         return Uint8Array.from(atob(base64), c => c.charCodeAt(0));
     }
 }
-
+BufferUtils.BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+BufferUtils._BASE64_LOOKUP = [];
+for (let i = 0, len = BufferUtils.BASE64_ALPHABET.length; i < len; ++i) {
+    BufferUtils._BASE64_LOOKUP[i] = BufferUtils.BASE64_ALPHABET[i];
+}
 Class.register(BufferUtils);
 
 class JSONUtils {
@@ -7700,7 +7775,7 @@ class DataChannel extends Observable {
         this._msgType = 0;
 
         /** @type {number} */
-        this._receivingTag = 0;
+        this._receivingTag = -1;
 
         /** @type {number} */
         this._sendingTag = 0;
@@ -7742,10 +7817,11 @@ class DataChannel extends Observable {
         this._timers.resetTimeout(`chunk-${expectedMsg.id}`, this._onTimeout.bind(this, expectedMsg), chunkTimeout);
         this._timers.resetTimeout(`msg-${expectedMsg.id}`, this._onTimeout.bind(this, expectedMsg), msgTimeout);
     }
-    
+
     /**
      * @abstract
      */
+
     /* istanbul ignore next */
     close() { throw new Error('Not implemented'); }
 
@@ -7771,84 +7847,88 @@ class DataChannel extends Observable {
      * @protected
      */
     _onMessage(msg) {
-        // Blindly forward empty messages.
-        // TODO should we drop them instead?
-        const buffer = new SerialBuffer(msg);
-        if (buffer.byteLength === 0) {
-            Log.w(DataChannel, 'Received empty message', buffer, msg);
-            this.fire('message', msg, this);
-            return;
-        }
-
-        // Chunk is too large.
-        if (buffer.byteLength > DataChannel.CHUNK_SIZE_MAX) {
-            this._onError('Received chunk larger than maximum chunk size, discarding');
-            return;
-        }
-
-        const tag = buffer.readUint8();
-
-        // Buffer length without tag.
-        const effectiveChunkLength = buffer.byteLength - buffer.readPos;
-        const chunk = buffer.read(effectiveChunkLength);
-
-        // Detect if this is a new message.
-        if (this._buffer === null) {
-            const chunkBuffer = new SerialBuffer(chunk);
-            const messageSize = Message.peekLength(chunkBuffer);
-
-            if (messageSize > DataChannel.MESSAGE_SIZE_MAX) {
-                this._onError(`Received message with excessive message size ${messageSize} > ${DataChannel.MESSAGE_SIZE_MAX}`);
+        try {
+            // Blindly forward empty messages.
+            // TODO should we drop them instead?
+            const buffer = new SerialBuffer(msg);
+            if (buffer.byteLength === 0) {
+                Log.w(DataChannel, 'Received empty message', buffer, msg);
+                this.fire('message', msg, this);
                 return;
             }
 
-            this._buffer = new SerialBuffer(messageSize);
-            this._receivingTag = tag;
-            this._msgType = Message.peekType(chunkBuffer);
-        }
+            // Chunk is too large.
+            if (buffer.byteLength > DataChannel.CHUNK_SIZE_MAX) {
+                this._onError('Received chunk larger than maximum chunk size, discarding');
+                return;
+            }
 
-        let remainingBytes = this._buffer.byteLength - this._buffer.writePos;
+            const tag = buffer.readUint8();
 
-        // Mismatch between buffer sizes.
-        if (effectiveChunkLength > remainingBytes) {
-            this._onError('Received chunk larger than remaining bytes to read, discarding');
-            return;
-        }
+            // Buffer length without tag.
+            const effectiveChunkLength = buffer.byteLength - buffer.readPos;
+            const chunk = buffer.read(effectiveChunkLength);
 
-        // Currently, we only support one message at a time.
-        if (tag !== this._receivingTag) {
-            this._onError(`Received message with wrong message tag ${tag}, expected ${this._receivingTag}`);
-            return;
-        }
+            // Detect if this is a new message.
+            if (this._buffer === null && tag === (this._receivingTag + 1) % NumberUtils.UINT8_MAX) {
+                const chunkBuffer = new SerialBuffer(chunk);
+                const messageSize = Message.peekLength(chunkBuffer);
 
-        // Write chunk and subtract remaining byte length.
-        this._buffer.write(chunk);
-        remainingBytes -= effectiveChunkLength;
-
-        const expectedMsg = this._expectedMessagesByType.get(this._msgType);
-        if (remainingBytes === 0) {
-            if (expectedMsg) {
-                this._timers.clearTimeout(`chunk-${expectedMsg.id}`);
-                this._timers.clearTimeout(`msg-${expectedMsg.id}`);
-                for (const type of expectedMsg.types) {
-                    this._expectedMessagesByType.delete(type);
+                if (messageSize > DataChannel.MESSAGE_SIZE_MAX) {
+                    this._onError(`Received message with excessive message size ${messageSize} > ${DataChannel.MESSAGE_SIZE_MAX}`);
+                    return;
                 }
-            } else {
-                this._timers.clearTimeout('chunk');
+
+                this._buffer = new SerialBuffer(messageSize);
+                this._receivingTag = tag;
+                this._msgType = Message.peekType(chunkBuffer);
             }
 
-            const msg = this._buffer.buffer;
-            this._buffer = null;
-            this._receivingTag = 0;
-            this.fire('message', msg, this);
-        } else {
-            // Set timeout.
-            if (expectedMsg) {
-                this._timers.resetTimeout(`chunk-${expectedMsg.id}`, this._onTimeout.bind(this, expectedMsg), expectedMsg.chunkTimeout);
-            } else {
-                this._timers.resetTimeout('chunk', this._onTimeout.bind(this), DataChannel.CHUNK_TIMEOUT);
+            if (this._buffer === null) {
+                Log.e(DataChannel, `Message does not start next tag ${this._receivingTag + 1} (but ${tag}), but buffer is null`);
+                return;
             }
-            this.fire('chunk', this._buffer);
+
+            // Currently, we only support one message at a time.
+            if (tag !== this._receivingTag) {
+                this._onError(`Received message with wrong message tag ${tag}, expected ${this._receivingTag}`);
+                return;
+            }
+
+            let remainingBytes = this._buffer.byteLength - this._buffer.writePos;
+
+            // Mismatch between buffer sizes.
+            if (effectiveChunkLength > remainingBytes) {
+                this._onError('Received chunk larger than remaining bytes to read, discarding');
+                return;
+            }
+
+            // Write chunk and subtract remaining byte length.
+            this._buffer.write(chunk);
+            remainingBytes -= effectiveChunkLength;
+
+            const expectedMsg = this._expectedMessagesByType.get(this._msgType);
+            if (remainingBytes === 0) {
+                if (expectedMsg) {
+                    this._timers.clearTimeout(`chunk-${expectedMsg.id}`);
+                    this._timers.clearTimeout(`msg-${expectedMsg.id}`);
+                    for (const type of expectedMsg.types) {
+                        this._expectedMessagesByType.delete(type);
+                    }
+                }
+
+                const msg = this._buffer.buffer;
+                this._buffer = null;
+                this.fire('message', msg, this);
+            } else {
+                // Set timeout.
+                if (expectedMsg) {
+                    this._timers.resetTimeout(`chunk-${expectedMsg.id}`, this._onTimeout.bind(this, expectedMsg), expectedMsg.chunkTimeout);
+                }
+                this.fire('chunk', this._buffer);
+            }
+        } catch (e) {
+            this._onError(`Error occured while parsing incoming message, ${e.message}`);
         }
     }
 
@@ -7914,6 +7994,7 @@ class DataChannel extends Observable {
      * @abstract
      * @param {Uint8Array} msg
      */
+
     /* istanbul ignore next */
     sendChunk(msg) { throw  new Error('Not implemented'); }
 
@@ -7921,9 +8002,11 @@ class DataChannel extends Observable {
      * @abstract
      * @type {DataChannel.ReadyState}
      */
+
     /* istanbul ignore next */
     get readyState() { throw new Error('Not implemented'); }
 }
+
 DataChannel.CHUNK_SIZE_MAX = 1024 * 16; // 16 kb
 DataChannel.MESSAGE_SIZE_MAX = 10 * 1024 * 1024; // 10 mb
 DataChannel.CHUNK_TIMEOUT = 1000 * 5; // 5 seconds
@@ -8019,379 +8102,6 @@ class WebRtcFactory {
     }
 }
 Class.register(WebRtcFactory);
-
-class WebRtcDataChannel extends DataChannel {
-    /**
-     * @param {RTCDataChannel} nativeChannel
-     */
-    constructor(nativeChannel) {
-        super();
-        // We expect WebRtc data channels to be ordered.
-        Assert.that(nativeChannel.ordered, 'WebRtc data channel not ordered');
-        /** @type {RTCDataChannel} */
-        this._channel = nativeChannel;
-
-        this._channel.onmessage = msg => this._onMessage(msg.data || msg);
-        this._channel.onclose = () => this._onClose();
-        this._channel.onerror = e => this.fire('error', e, this);
-    }
-
-    /**
-     * @param {ArrayBuffer} msg
-     * @protected
-     * @override
-     */
-    _onMessage(msg) {
-        // FIXME It seems that Firefox still sometimes receives blobs instead of ArrayBuffers on RTC connections.
-        // FIXME FileReader is async and may RE-ORDER MESSAGES!
-        if (msg instanceof Blob) {
-            Log.e(DataChannel, 'Converting blob to ArrayBuffer on WebRtcDataChannel');
-            const reader = new FileReader();
-            reader.onloadend = () => super._onMessage(reader.result);
-            reader.readAsArrayBuffer(msg);
-        } else {
-            super._onMessage(msg);
-        }
-    }
-    /**
-     * @override
-     */
-    sendChunk(msg) {
-        this._channel.send(msg);
-    }
-
-    /**
-     * @override
-     */
-    close() {
-        this._channel.close();
-    }
-
-    /**
-     * @override
-     */
-    get readyState() {
-        return DataChannel.ReadyState.fromString(this._channel.readyState);
-    }
-}
-
-Class.register(WebRtcDataChannel);
-
-class WebRtcUtils {
-    static candidateToNetAddress(candidate) {
-        // TODO XXX Ad-hoc parsing of candidates - Improve!
-        const parts = candidate.candidate.split(' ');
-        if (parts.length < 6) {
-            return null;
-        }
-        return NetAddress.fromIP(parts[4]);
-    }
-}
-Class.register(WebRtcUtils);
-
-class WebRtcConnector extends Observable {
-    /**
-     * @constructor
-     * @param {NetworkConfig} networkConfig
-     */
-    constructor(networkConfig) {
-        super();
-
-        /** @type {NetworkConfig} */
-        this._networkConfig = networkConfig;
-
-        /** @type {HashMap.<PeerId,PeerConnector>} */
-        this._connectors = new HashMap();
-
-        /** @type {Timers} */
-        this._timers = new Timers();
-    }
-
-    /**
-     * @param {PeerAddress} peerAddress
-     * @param {PeerChannel} signalChannel
-     * @returns {boolean}
-     */
-    connect(peerAddress, signalChannel) {
-        if (peerAddress.protocol !== Protocol.RTC) throw 'Malformed peerAddress';
-
-        const peerId = peerAddress.peerId;
-        if (this._connectors.contains(peerId)) {
-            Log.w(WebRtcConnector, `WebRtc: Already connecting/connected to ${peerId}`);
-            return false;
-        }
-
-        const connector = new OutboundPeerConnector(this._networkConfig, peerAddress, signalChannel);
-        connector.on('connection', conn => this._onConnection(conn, peerId));
-        this._connectors.put(peerId, connector);
-
-        this._timers.setTimeout(`connect_${peerId}`, () => {
-            this._connectors.remove(peerId);
-            this._timers.clearTimeout(`connect_${peerId}`);
-            this.fire('error', peerAddress, 'timeout');
-        }, WebRtcConnector.CONNECT_TIMEOUT);
-
-        return true;
-    }
-
-    isValidSignal(msg) {
-        return this._connectors.contains(msg.senderId) && this._connectors.get(msg.senderId).nonce === msg.nonce;
-    }
-
-    onSignal(channel, msg) {
-        // Check if we received an unroutable/ttl exceeded response from one of the signaling peers.
-        if (msg.isUnroutable() || msg.isTtlExceeded()) {
-            // Clear the timeout early if we initiated the connection.
-            if (this.isValidSignal(msg) && this._connectors.get(msg.senderId) instanceof OutboundPeerConnector) {
-                const peerAddress = this._connectors.get(msg.senderId).peerAddress;
-
-                this._connectors.remove(msg.senderId);
-                this._timers.clearTimeout(`connect_${msg.senderId}`);
-
-                // XXX Reason needs to be adapted when more flags are added.
-                const reason = msg.isUnroutable() ? 'unroutable' : 'ttl exceeded';
-                this.fire('error', peerAddress, reason);
-            }
-
-            return;
-        }
-
-        let payload;
-        try {
-            payload = JSON.parse(BufferUtils.toAscii(msg.payload));
-        } catch (e) {
-            Log.e(WebRtcConnector, `Failed to parse signal payload from ${msg.senderId}`);
-            return;
-        }
-
-        if (!payload) {
-            Log.d(WebRtcConnector, `Discarding signal from ${msg.senderId} - empty payload`);
-            return;
-        }
-
-        if (payload.type === 'offer') {
-            // Check if we have received an offer on an ongoing connection.
-            // This can happen if two peers initiate connections to one another
-            // simultaneously. Resolve this by having the peer with the higher
-            // peerId discard the offer while the one with the lower peerId
-            // accepts it.
-            let connector = this._connectors.get(msg.senderId);
-            if (connector) {
-                if (msg.recipientId.compare(msg.senderId) > 0) {
-                    // Discard the offer.
-                    Log.d(WebRtcConnector, `Simultaneous connection, discarding offer from ${msg.senderId} (<${msg.recipientId})`);
-                    return;
-                } else if (connector instanceof InboundPeerConnector) {
-                    // We have already seen an offer from this peer. Forward it to the existing connector.
-                    Log.w(WebRtcConnector, `Duplicate offer received from ${msg.senderId}`);
-                    connector.onSignal(payload);
-                    return;
-                } else {
-                    // We are going to accept the offer. Clear the connect timeout
-                    // from our previous Outbound connection attempt to this peer.
-                    Log.d(WebRtcConnector, `Simultaneous connection, accepting offer from ${msg.senderId} (>${msg.recipientId})`);
-                    this._timers.clearTimeout(`connect_${msg.senderId}`);
-                }
-            }
-
-            // Accept the offer.
-            connector = new InboundPeerConnector(this._networkConfig, channel, msg.senderId, payload);
-            connector.on('connection', conn => this._onConnection(conn, msg.senderId));
-            this._connectors.put(msg.senderId, connector);
-
-            this._timers.setTimeout(`connect_${msg.senderId}`, () => {
-                this._timers.clearTimeout(`connect_${msg.senderId}`);
-                this._connectors.remove(msg.senderId);
-            }, WebRtcConnector.CONNECT_TIMEOUT);
-        }
-
-        // If we are already establishing a connection with the sender of this
-        // signal, forward it to the corresponding connector.
-        else if (this._connectors.contains(msg.senderId)) {
-            this._connectors.get(msg.senderId).onSignal(payload);
-        }
-
-        // If none of the above conditions is met, the signal is invalid and we discard it.
-    }
-
-    _onConnection(conn, peerId) {
-        // Clear the connect timeout.
-        this._timers.clearTimeout(`connect_${peerId}`);
-
-        // Clean up when this connection closes.
-        conn.on('close', () => this._onClose(peerId));
-
-        // Tell listeners about the new connection.
-        this.fire('connection', conn);
-    }
-
-    _onClose(peerId) {
-        this._connectors.remove(peerId);
-        this._timers.clearTimeout(`connect_${peerId}`);
-    }
-}
-WebRtcConnector.CONNECT_TIMEOUT = 5000; // ms
-Class.register(WebRtcConnector);
-
-class PeerConnector extends Observable {
-    /**
-     * @param {NetworkConfig} networkConfig
-     * @param {PeerChannel} signalChannel
-     * @param {PeerId} peerId
-     * @param {PeerAddress} peerAddress
-     */
-    constructor(networkConfig, signalChannel, peerId, peerAddress) {
-        super();
-        /** @type {NetworkConfig} */
-        this._networkConfig = networkConfig;
-        /** @type {PeerChannel} */
-        this._signalChannel = signalChannel;
-        /** @type {PeerId} */
-        this._peerId = peerId;
-        /** @type {PeerAddress} */
-        this._peerAddress = peerAddress; // null for inbound connections
-
-        /** @type {number} */
-        this._nonce = NumberUtils.randomUint32();
-
-        /** @type {RTCPeerConnection} */
-        this._rtcConnection = WebRtcFactory.newPeerConnection(this._networkConfig.rtcConfig);
-        this._rtcConnection.onicecandidate = e => this._onIceCandidate(e);
-
-        this._lastIceCandidate = null;
-        this._iceCandidateQueue = [];
-    }
-
-    onSignal(signal) {
-        if (signal.sdp) {
-            this._rtcConnection.setRemoteDescription(WebRtcFactory.newSessionDescription(signal))
-                .then(() => {
-                    if (signal.type === 'offer') {
-                        this._rtcConnection.createAnswer()
-                            .then(description => this._onDescription(description))
-                            .catch(Log.e.tag(PeerConnector));
-                    }
-
-                    this._handleCandidateQueue().catch(Log.w.tag(PeerConnector));
-                })
-                .catch(Log.e.tag(PeerConnector));
-        } else if (signal.candidate) {
-            this._addIceCandidate(signal).catch(Log.w.tag(PeerConnector));
-        }
-    }
-
-    /**
-     * @param {*} signal
-     * @returns {Promise}
-     * @private
-     */
-    _addIceCandidate(signal) {
-        this._lastIceCandidate = WebRtcFactory.newIceCandidate(signal);
-
-        // Do not try to add ICE candidates before the remote description is set.
-        if (!this._rtcConnection.remoteDescription || !this._rtcConnection.remoteDescription.type) {
-            this._iceCandidateQueue.push(signal);
-            return Promise.resolve();
-        }
-
-        return this._rtcConnection.addIceCandidate(this._lastIceCandidate)
-            .catch(Log.e.tag(PeerConnector));
-    }
-
-    async _handleCandidateQueue() {
-        // Handle ICE candidates if they already arrived.
-        for (const candidate of this._iceCandidateQueue) {
-            await this._addIceCandidate(candidate);
-        }
-        this._iceCandidateQueue = [];
-    }
-
-    _signal(signal) {
-        const payload = BufferUtils.fromAscii(JSON.stringify(signal));
-        const keyPair = this._networkConfig.keyPair;
-        const peerId = this._networkConfig.peerId;
-        this._signalChannel.signal(
-            peerId,
-            this._peerId,
-            this._nonce,
-            Network.SIGNAL_TTL_INITIAL,
-            0, /*flags*/
-            payload,
-            keyPair.publicKey,
-            Signature.create(keyPair.privateKey, keyPair.publicKey, payload)
-        );
-    }
-
-    _onIceCandidate(event) {
-        if (event.candidate !== null) {
-            this._signal(event.candidate);
-        }
-    }
-
-    _onDescription(description) {
-        this._rtcConnection.setLocalDescription(description)
-            .then(() => this._signal(this._rtcConnection.localDescription))
-            .catch(Log.e.tag(PeerConnector));
-    }
-
-    _onDataChannel(event) {
-        const channel = new WebRtcDataChannel(event.channel || event.target);
-
-        // There is no API to get the remote IP address. As a crude heuristic, we parse the IP address
-        // from the last ICE candidate seen before the connection was established.
-        // TODO Can we improve this?
-        let netAddress = null;
-        if (this._lastIceCandidate) {
-            try {
-                netAddress = WebRtcUtils.candidateToNetAddress(this._lastIceCandidate);
-            } catch (e) {
-                Log.w(PeerConnector, `Failed to parse IP from ICE candidate: ${this._lastIceCandidate}`);
-            }
-        } else {
-            // XXX Why does this happen?
-            Log.w(PeerConnector, 'No ICE candidate seen for inbound connection');
-        }
-
-        const conn = new PeerConnection(channel, Protocol.RTC, netAddress, this._peerAddress);
-        this.fire('connection', conn);
-    }
-
-    get nonce() {
-        return this._nonce;
-    }
-
-    get peerAddress() {
-        return this._peerAddress;
-    }
-}
-Class.register(PeerConnector);
-
-class OutboundPeerConnector extends PeerConnector {
-    constructor(webRtcConfig, peerAddress, signalChannel) {
-        super(webRtcConfig, signalChannel, peerAddress.peerId, peerAddress);
-        this._peerAddress = peerAddress;
-
-        // Create offer.
-        const channel = this._rtcConnection.createDataChannel('data-channel');
-        channel.binaryType = 'arraybuffer';
-        channel.onopen = e => this._onDataChannel(e);
-        this._rtcConnection.createOffer()
-            .then(description => this._onDescription(description))
-            .catch(Log.e.tag(OutboundPeerConnector));
-    }
-}
-Class.register(OutboundPeerConnector);
-
-class InboundPeerConnector extends PeerConnector {
-    constructor(webRtcConfig, signalChannel, peerId, offer) {
-        super(webRtcConfig, signalChannel, peerId, null);
-        this._rtcConnection.ondatachannel = event => {
-            event.channel.onopen = e => this._onDataChannel(e);
-        };
-        this.onSignal(offer);
-    }
-}
-Class.register(InboundPeerConnector);
 
 class WebSocketFactory {
     /**
@@ -9155,11 +8865,72 @@ class BufferUtils {
      * @return {Uint8Array}
      */
     static fromAscii(string) {
-        var buf = new Uint8Array(string.length);
+        const buf = new Uint8Array(string.length);
         for (let i = 0; i < string.length; ++i) {
             buf[i] = string.charCodeAt(i);
         }
         return buf;
+    }
+
+    static _codePointTextDecoder(u8) {
+        if (typeof TextDecoder === 'undefined') throw new Error('TextDecoder not supported');
+        if (BufferUtils._ISO_8859_15_DECODER === null) throw new Error('TextDecoder does not supprot iso-8859-15');
+        if (BufferUtils._ISO_8859_15_DECODER === undefined) {
+            try {
+                BufferUtils._ISO_8859_15_DECODER = new TextDecoder('iso-8859-15');
+            } finally {
+                BufferUtils._ISO_8859_15_DECODER = null;
+            }
+        }
+        return BufferUtils._ISO_8859_15_DECODER.decode(u8)
+            .replace('€', '¤').replace('Š', '¦').replace('š', '¨').replace('Ž', '´')
+            .replace('ž', '¸').replace('Œ', '¼').replace('œ', '½').replace('Ÿ', '¾');
+    }
+
+    static _tripletToBase64(num) {
+        return BufferUtils._BASE64_LOOKUP[num >> 18 & 0x3F] + BufferUtils._BASE64_LOOKUP[num >> 12 & 0x3F] + BufferUtils._BASE64_LOOKUP[num >> 6 & 0x3F] + BufferUtils._BASE64_LOOKUP[num & 0x3F];
+    }
+
+    static _base64encodeChunk(u8, start, end) {
+        let tmp;
+        const output = [];
+        for (let i = start; i < end; i += 3) {
+            tmp = ((u8[i] << 16) & 0xFF0000) + ((u8[i + 1] << 8) & 0xFF00) + (u8[i + 2] & 0xFF);
+            output.push(BufferUtils._tripletToBase64(tmp));
+        }
+        return output.join('');
+    }
+
+    static _base64fromByteArray(u8) {
+        let tmp;
+        const len = u8.length;
+        const extraBytes = len % 3; // if we have 1 byte left, pad 2 bytes
+        let output = '';
+        const parts = [];
+        const maxChunkLength = 16383; // must be multiple of 3
+
+        // go through the array every three bytes, we'll deal with trailing stuff later
+        for (let i = 0, len2 = len - extraBytes; i < len2; i += maxChunkLength) {
+            parts.push(BufferUtils._base64encodeChunk(u8, i, (i + maxChunkLength) > len2 ? len2 : (i + maxChunkLength)));
+        }
+
+        // pad the end with zeros, but make sure to not forget the extra bytes
+        if (extraBytes === 1) {
+            tmp = u8[len - 1];
+            output += BufferUtils._BASE64_LOOKUP[tmp >> 2];
+            output += BufferUtils._BASE64_LOOKUP[(tmp << 4) & 0x3F];
+            output += '==';
+        } else if (extraBytes === 2) {
+            tmp = (u8[len - 2] << 8) + (u8[len - 1]);
+            output += BufferUtils._BASE64_LOOKUP[tmp >> 10];
+            output += BufferUtils._BASE64_LOOKUP[(tmp >> 4) & 0x3F];
+            output += BufferUtils._BASE64_LOOKUP[(tmp << 2) & 0x3F];
+            output += '=';
+        }
+
+        parts.push(output);
+
+        return parts.join('');
     }
 
     /**
@@ -9167,7 +8938,17 @@ class BufferUtils {
      * @return {string}
      */
     static toBase64(buffer) {
-        return btoa(String.fromCharCode(...new Uint8Array(buffer)));
+        if (PlatformUtils.isNodeJs()) {
+            return new Buffer(buffer).toString('base64');
+        } else if (typeof TextDecoder !== 'undefined' && BufferUtils._ISO_8859_15_DECODER !== null) {
+            try {
+                return btoa(BufferUtils._codePointTextDecoder(new Uint8Array(buffer)));
+            } catch (e) {
+                // Disabled itself
+            }
+        }
+
+        return BufferUtils._base64fromByteArray(new Uint8Array(buffer));
     }
 
     /**
@@ -9221,7 +9002,7 @@ class BufferUtils {
         if (shift !== 3) {
             res += alphabet[carry & 0x1f];
         }
-        
+
         while (res.length % 8 !== 0 && alphabet.length === 33) {
             res += alphabet[32];
         }
@@ -9348,12 +9129,17 @@ class BufferUtils {
         return res;
     }
 }
+BufferUtils.BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 BufferUtils.BASE32_ALPHABET = {
-    RFC4648:        'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567=',
-    RFC4648_HEX:    '0123456789ABCDEFGHIJKLMNOPQRSTUV=',
-    NIMIQ:          '0123456789ABCDEFGHJKLMNPQRSTUVXY'
+    RFC4648: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567=',
+    RFC4648_HEX: '0123456789ABCDEFGHIJKLMNOPQRSTUV=',
+    NIMIQ: '0123456789ABCDEFGHJKLMNPQRSTUVXY'
 };
 BufferUtils.HEX_ALPHABET = '0123456789abcdef';
+BufferUtils._BASE64_LOOKUP = [];
+for (let i = 0, len = BufferUtils.BASE64_ALPHABET.length; i < len; ++i) {
+    BufferUtils._BASE64_LOOKUP[i] = BufferUtils.BASE64_ALPHABET[i];
+}
 
 Class.register(BufferUtils);
 
@@ -10881,7 +10667,7 @@ class Policy {
      * @constant
      */
     static get BLOCK_TARGET_MAX() {
-        return BlockUtils.compactToTarget(0x1f00ffff); // 16 zero bits, bitcoin uses 32 (0x1d00ffff)
+        return Math.pow(2, 240);
     }
 }
 
@@ -10943,7 +10729,7 @@ Policy.TOTAL_SUPPLY = 21e14;
  * @type {number}
  * @constant
  */
-Policy.INITIAL_SUPPLY = 0;
+Policy.INITIAL_SUPPLY = 252000000000000;
 
 /**
  * Emission speed.
@@ -11401,6 +11187,8 @@ class PublicKey extends Primitive {
      * @return {PublicKey}
      */
     static sum(publicKeys) {
+        publicKeys = publicKeys.slice();
+        publicKeys.sort((a, b) => a.compare(b));
         return new PublicKey(Crypto.delinearizeAndAggregatePublicKeys(publicKeys.map(key => key._obj)));
     }
 
@@ -11523,11 +11311,16 @@ class KeyPair extends Primitive {
      * @return {Promise<KeyPair>}
      */
     static async fromEncrypted(buf, key) {
+        const type = buf.readUint8();
+        if (type !== 1) throw new Error('Unsupported type');
+        const roundsLog = buf.readUint8();
+        if (roundsLog > 32) throw new Error('Rounds out-of-bounds');
+        const rounds = Math.pow(2, roundsLog);
         const encryptedKey = PrivateKey.unserialize(buf);
         const salt = buf.read(KeyPair.EXPORT_SALT_LENGTH);
         const check = buf.read(KeyPair.EXPORT_CHECKSUM_LENGTH);
 
-        const privateKey = new PrivateKey(await KeyPair._otpKdf(encryptedKey.serialize(), key, salt, KeyPair.EXPORT_KDF_ROUNDS));
+        const privateKey = new PrivateKey(await KeyPair._otpKdf(encryptedKey.serialize(), key, salt, rounds));
         const keyPair = KeyPair.fromPrivateKey(privateKey);
         const pubHash = keyPair.publicKey.hash();
         if (!BufferUtils.equals(pubHash.subarray(0, 4), check)) {
@@ -11621,6 +11414,8 @@ class KeyPair extends Primitive {
         Crypto.lib.getRandomValues(salt);
 
         const buf = new SerialBuffer(this.encryptedSize);
+        buf.writeUint8(1); // Argon2 KDF
+        buf.writeUint8(Math.log2(KeyPair.EXPORT_KDF_ROUNDS));
         buf.write(await KeyPair._otpKdf(this.privateKey.serialize(), key, salt, KeyPair.EXPORT_KDF_ROUNDS));
         buf.write(salt);
         buf.write(this.publicKey.hash().subarray(0, KeyPair.EXPORT_CHECKSUM_LENGTH));
@@ -11632,7 +11427,7 @@ class KeyPair extends Primitive {
 
     /** @type {number} */
     get encryptedSize() {
-        return this.privateKey.serializedSize + KeyPair.EXPORT_SALT_LENGTH + KeyPair.EXPORT_CHECKSUM_LENGTH;
+        return 2 + this.privateKey.serializedSize + KeyPair.EXPORT_SALT_LENGTH + KeyPair.EXPORT_CHECKSUM_LENGTH;
     }
 
     /**
@@ -14441,6 +14236,14 @@ class AccountsTree extends Observable {
     get tx() {
         return this._store.tx;
     }
+
+    /**
+     * @returns {Promise.<boolean>}
+     */
+    async isEmpty() {
+        const rootNode = await this._store.getRootNode();
+        return !rootNode.hasChildren();
+    }
 }
 Class.register(AccountsTree);
 
@@ -14534,7 +14337,6 @@ class SynchronousAccountsTree extends AccountsTree {
     /**
      * @param {Address} address
      * @param {Account} account
-     * @private
      */
     putSync(address, account) {
         this.putBatch(address, account);
@@ -14997,6 +14799,41 @@ class Accounts extends Observable {
     }
 
     /**
+     * @param {Block} genesisBlock
+     * @param {string} encodedAccounts
+     * @returns {Promise.<void>}
+     */
+    async initialize(genesisBlock, encodedAccounts) {
+        Assert.that(await this._tree.isEmpty());
+
+        const tree = await this._tree.synchronousTransaction();
+        try {
+            const buf = BufferUtils.fromBase64(encodedAccounts);
+            const count = buf.readUint16();
+            for (let i = 0; i < count; i++) {
+                const address = Address.unserialize(buf);
+                const account = Account.unserialize(buf);
+                tree.putSync(address, account);
+            }
+
+            await this._commitBlockBody(tree, genesisBlock.body, genesisBlock.height, new TransactionCache());
+
+            tree.finalizeBatch();
+        } catch (e) {
+            await tree.abort();
+            throw e;
+        }
+
+        const hash = tree.rootSync();
+        if (!genesisBlock.accountsHash.equals(hash)) {
+            await tree.abort();
+            throw new Error('Genesis AccountsHash mismatch');
+        }
+
+        return tree.commit();
+    }
+
+    /**
      * @param {Array.<Address>} addresses
      * @returns {Promise.<AccountsProof>}
      */
@@ -15341,7 +15178,6 @@ class Accounts extends Observable {
         return this._tree.tx;
     }
 }
-
 Class.register(Accounts);
 
 class BlockHeader {
@@ -16131,7 +15967,9 @@ class BlockUtils {
         nextTarget = Math.min(nextTarget, Policy.BLOCK_TARGET_MAX);
         nextTarget = Math.max(nextTarget, 1);
 
-        return nextTarget;
+        // XXX Reduce target precision to nBits precision.
+        const nBits = BlockUtils.targetToCompact(nextTarget);
+        return BlockUtils.compactToTarget(nBits);
     }
 }
 Class.register(BlockUtils);
@@ -16501,7 +16339,7 @@ class Transaction {
         if (this._senderType > o._senderType) return 1;
         if (this._flags < o._flags) return -1;
         if (this._flags > o._flags) return 1;
-        return 0;
+        return BufferUtils.compare(this._data, o._data);
     }
 
     /**
@@ -17989,23 +17827,6 @@ class Block {
 }
 Block.TIMESTAMP_DRIFT_MAX = 600 /* seconds */; // 10 minutes
 Class.register(Block);
-
-/* Genesis Block */
-Block.GENESIS = new Block(
-    new BlockHeader(
-        new Hash(null),
-        new Hash(null),
-        Hash.fromBase64('z2Qp5kzePlvq/ABN31K1eUAQ5Dn8rpeZQU0PTQn9pH0='),
-        Hash.fromBase64('jIdIsQkjXmPKtb0RM6sYZ6Tfq/Y7DPxEirBKYOhtH7k='),
-        BlockUtils.difficultyToCompact(1),
-        1,
-        0,
-        313530,
-        BlockHeader.Version.V1),
-    new BlockInterlink([], new Hash(null)),
-    new BlockBody(Address.fromBase64('9KzhefhVmhN0pOSnzcIYnlVOTs0='), [])
-);
-Block.GENESIS.HASH = Hash.fromBase64('90SfoDkkc0+taLwtyuEM/Q2J4jvN24xmVnMr7ywaT4k=');
 
 /**
  * @interface
@@ -20305,7 +20126,7 @@ class FullChain extends BaseChain {
             await tx.setHead(Block.GENESIS.HASH);
             await tx.commit();
 
-            await this._accounts.commitBlock(Block.GENESIS, this._transactionCache);
+            await this._accounts.initialize(Block.GENESIS, Accounts.GENESIS);
         }
 
         return this;
@@ -20964,7 +20785,7 @@ class FullConsensusAgent extends BaseConsensusAgent {
         // This sets a maximum length for forks that the full client will accept:
         //   FullConsensusAgent.SYNC_ATTEMPTS_MAX * BaseInvectoryMessage.VECTORS_MAX_COUNT
         if (this._numBlocksExtending === 0 && ++this._failedSyncs >= FullConsensusAgent.SYNC_ATTEMPTS_MAX) {
-            this._peer.channel.close('blockchain sync failed');
+            this._peer.channel.ban('blockchain sync failed');
             return;
         }
 
@@ -21103,12 +20924,8 @@ class FullConsensusAgent extends BaseConsensusAgent {
     async _onKnownBlockAnnounced(hash, block) {
         if (!this._syncing) return;
 
-        // Check if this block is on a fork.
-        const onFork = !(await this._getBlock(hash, /*includeForks*/ false));
-        if (onFork) {
-            this._numBlocksForking++;
-            this._forkHead = block;
-        }
+        this._numBlocksForking++;
+        this._forkHead = block;
     }
 
     /**
@@ -21386,7 +21203,7 @@ class FullConsensusAgent extends BaseConsensusAgent {
  * blocks.
  * @type {number}
  */
-FullConsensusAgent.SYNC_ATTEMPTS_MAX = 10;
+FullConsensusAgent.SYNC_ATTEMPTS_MAX = 25;
 /**
  * Maximum number of inventory vectors to sent in the response for onGetBlocks.
  * @type {number}
@@ -21792,7 +21609,7 @@ class LightConsensusAgent extends FullConsensusAgent {
                         this.fire('sync-accounts-tree', this._peer.peerAddress);
                         break;
                     case PartialLightChain.State.PROVE_BLOCKS:
-                        this._requestProofBlocks().catch(Log.w.tag(LightConsensusAgent));
+                        this._requestProofBlocks();
                         this.fire('verify-accounts-tree', this._peer.peerAddress);
                         break;
                     case PartialLightChain.State.COMPLETE:
@@ -24681,6 +24498,27 @@ class Consensus {
 
 Class.register(Consensus);
 
+/* Genesis Block */
+Block.GENESIS = new Block(
+    new BlockHeader(
+        new Hash(null),
+        new Hash(null),
+        Hash.fromBase64('giOIYTBojKQPmBLq5msCgObOL3KnQ9CKrIGb5HWz7E8='),
+        Hash.fromBase64('xexmOOk+2oLBIhwkCD+caw2FsifB0U6tXlles8Tycts='),
+        BlockUtils.difficultyToCompact(1),
+        1,
+        0,
+        104295,
+        BlockHeader.Version.V1),
+    new BlockInterlink([], new Hash(null)),
+    new BlockBody(Address.fromBase64('AAAAAAAAAAAAAAAAAAAAAAAAAAA='), [])
+);
+Block.GENESIS.HASH = Hash.fromBase64('ykmTb222PK189z6x6dpT3Ul607cGjzFzECR4WXO+m+Y=');
+
+/* Genesis Accounts */
+Accounts.GENESIS =
+    'AAIP7R94Gl77Xrk4xvszHLBXdCzC9AAAAHKYqT3gAAh2jadJcsL852C50iDDRIdlFjsNAAAAcpipPeAA';
+
 class Protocol {
 }
 Protocol.DUMB = 0;
@@ -26146,7 +25984,7 @@ PeerAddresses.SEED_PEERS = [
     // WsPeerAddress.seed('seed3.nimiq-network.com', 8080),
     // WsPeerAddress.seed('seed4.nimiq-network.com', 8080),
     // WsPeerAddress.seed('emily.nimiq-network.com', 443)
-    WsPeerAddress.seed('nimiqminer.com', 8080)
+    WsPeerAddress.seed('dev.nimiq-network.com', 8080, 'e65e39616662f2c16d62dc08915e5a1d104619db8c2b9cf9b389f96c8dce9837')
 ];
 Class.register(PeerAddresses);
 
@@ -28424,6 +28262,379 @@ MessageFactory.CLASSES[Message.Type.TRANSACTION_RECEIPTS] = TransactionReceiptsM
 MessageFactory.CLASSES[Message.Type.VERACK] = VerAckMessage;
 Class.register(MessageFactory);
 
+class WebRtcConnector extends Observable {
+    /**
+     * @constructor
+     * @param {NetworkConfig} networkConfig
+     */
+    constructor(networkConfig) {
+        super();
+
+        /** @type {NetworkConfig} */
+        this._networkConfig = networkConfig;
+
+        /** @type {HashMap.<PeerId,PeerConnector>} */
+        this._connectors = new HashMap();
+
+        /** @type {Timers} */
+        this._timers = new Timers();
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @param {PeerChannel} signalChannel
+     * @returns {boolean}
+     */
+    connect(peerAddress, signalChannel) {
+        if (peerAddress.protocol !== Protocol.RTC) throw 'Malformed peerAddress';
+
+        const peerId = peerAddress.peerId;
+        if (this._connectors.contains(peerId)) {
+            Log.w(WebRtcConnector, `WebRtc: Already connecting/connected to ${peerId}`);
+            return false;
+        }
+
+        const connector = new OutboundPeerConnector(this._networkConfig, peerAddress, signalChannel);
+        connector.on('connection', conn => this._onConnection(conn, peerId));
+        this._connectors.put(peerId, connector);
+
+        this._timers.setTimeout(`connect_${peerId}`, () => {
+            this._connectors.remove(peerId);
+            this._timers.clearTimeout(`connect_${peerId}`);
+            this.fire('error', peerAddress, 'timeout');
+        }, WebRtcConnector.CONNECT_TIMEOUT);
+
+        return true;
+    }
+
+    isValidSignal(msg) {
+        return this._connectors.contains(msg.senderId) && this._connectors.get(msg.senderId).nonce === msg.nonce;
+    }
+
+    onSignal(channel, msg) {
+        // Check if we received an unroutable/ttl exceeded response from one of the signaling peers.
+        if (msg.isUnroutable() || msg.isTtlExceeded()) {
+            // Clear the timeout early if we initiated the connection.
+            if (this.isValidSignal(msg) && this._connectors.get(msg.senderId) instanceof OutboundPeerConnector) {
+                const peerAddress = this._connectors.get(msg.senderId).peerAddress;
+
+                this._connectors.remove(msg.senderId);
+                this._timers.clearTimeout(`connect_${msg.senderId}`);
+
+                // XXX Reason needs to be adapted when more flags are added.
+                const reason = msg.isUnroutable() ? 'unroutable' : 'ttl exceeded';
+                this.fire('error', peerAddress, reason);
+            }
+
+            return;
+        }
+
+        let payload;
+        try {
+            payload = JSON.parse(BufferUtils.toAscii(msg.payload));
+        } catch (e) {
+            Log.e(WebRtcConnector, `Failed to parse signal payload from ${msg.senderId}`);
+            return;
+        }
+
+        if (!payload) {
+            Log.d(WebRtcConnector, `Discarding signal from ${msg.senderId} - empty payload`);
+            return;
+        }
+
+        if (payload.type === 'offer') {
+            // Check if we have received an offer on an ongoing connection.
+            // This can happen if two peers initiate connections to one another
+            // simultaneously. Resolve this by having the peer with the higher
+            // peerId discard the offer while the one with the lower peerId
+            // accepts it.
+            let connector = this._connectors.get(msg.senderId);
+            if (connector) {
+                if (msg.recipientId.compare(msg.senderId) > 0) {
+                    // Discard the offer.
+                    Log.d(WebRtcConnector, `Simultaneous connection, discarding offer from ${msg.senderId} (<${msg.recipientId})`);
+                    return;
+                } else if (connector instanceof InboundPeerConnector) {
+                    // We have already seen an offer from this peer. Forward it to the existing connector.
+                    Log.w(WebRtcConnector, `Duplicate offer received from ${msg.senderId}`);
+                    connector.onSignal(payload);
+                    return;
+                } else {
+                    // We are going to accept the offer. Clear the connect timeout
+                    // from our previous Outbound connection attempt to this peer.
+                    Log.d(WebRtcConnector, `Simultaneous connection, accepting offer from ${msg.senderId} (>${msg.recipientId})`);
+                    this._timers.clearTimeout(`connect_${msg.senderId}`);
+                }
+            }
+
+            // Accept the offer.
+            connector = new InboundPeerConnector(this._networkConfig, channel, msg.senderId, payload);
+            connector.on('connection', conn => this._onConnection(conn, msg.senderId));
+            this._connectors.put(msg.senderId, connector);
+
+            this._timers.setTimeout(`connect_${msg.senderId}`, () => {
+                this._timers.clearTimeout(`connect_${msg.senderId}`);
+                this._connectors.remove(msg.senderId);
+            }, WebRtcConnector.CONNECT_TIMEOUT);
+        }
+
+        // If we are already establishing a connection with the sender of this
+        // signal, forward it to the corresponding connector.
+        else if (this._connectors.contains(msg.senderId)) {
+            this._connectors.get(msg.senderId).onSignal(payload);
+        }
+
+        // If none of the above conditions is met, the signal is invalid and we discard it.
+    }
+
+    _onConnection(conn, peerId) {
+        // Clear the connect timeout.
+        this._timers.clearTimeout(`connect_${peerId}`);
+
+        // Clean up when this connection closes.
+        conn.on('close', () => this._onClose(peerId));
+
+        // Tell listeners about the new connection.
+        this.fire('connection', conn);
+    }
+
+    _onClose(peerId) {
+        this._connectors.remove(peerId);
+        this._timers.clearTimeout(`connect_${peerId}`);
+    }
+}
+WebRtcConnector.CONNECT_TIMEOUT = 5000; // ms
+Class.register(WebRtcConnector);
+
+class PeerConnector extends Observable {
+    /**
+     * @param {NetworkConfig} networkConfig
+     * @param {PeerChannel} signalChannel
+     * @param {PeerId} peerId
+     * @param {PeerAddress} peerAddress
+     */
+    constructor(networkConfig, signalChannel, peerId, peerAddress) {
+        super();
+        /** @type {NetworkConfig} */
+        this._networkConfig = networkConfig;
+        /** @type {PeerChannel} */
+        this._signalChannel = signalChannel;
+        /** @type {PeerId} */
+        this._peerId = peerId;
+        /** @type {PeerAddress} */
+        this._peerAddress = peerAddress; // null for inbound connections
+
+        /** @type {number} */
+        this._nonce = NumberUtils.randomUint32();
+
+        /** @type {RTCPeerConnection} */
+        this._rtcConnection = WebRtcFactory.newPeerConnection(this._networkConfig.rtcConfig);
+        this._rtcConnection.onicecandidate = e => this._onIceCandidate(e);
+
+        this._lastIceCandidate = null;
+        this._iceCandidateQueue = [];
+    }
+
+    onSignal(signal) {
+        if (signal.sdp) {
+            this._rtcConnection.setRemoteDescription(WebRtcFactory.newSessionDescription(signal))
+                .then(() => {
+                    if (signal.type === 'offer') {
+                        this._rtcConnection.createAnswer()
+                            .then(description => this._onDescription(description))
+                            .catch(Log.e.tag(PeerConnector));
+                    }
+
+                    this._handleCandidateQueue().catch(Log.w.tag(PeerConnector));
+                })
+                .catch(Log.e.tag(PeerConnector));
+        } else if (signal.candidate) {
+            this._addIceCandidate(signal).catch(Log.w.tag(PeerConnector));
+        }
+    }
+
+    /**
+     * @param {*} signal
+     * @returns {Promise}
+     * @private
+     */
+    _addIceCandidate(signal) {
+        this._lastIceCandidate = WebRtcFactory.newIceCandidate(signal);
+
+        // Do not try to add ICE candidates before the remote description is set.
+        if (!this._rtcConnection.remoteDescription || !this._rtcConnection.remoteDescription.type) {
+            this._iceCandidateQueue.push(signal);
+            return Promise.resolve();
+        }
+
+        return this._rtcConnection.addIceCandidate(this._lastIceCandidate)
+            .catch(Log.e.tag(PeerConnector));
+    }
+
+    async _handleCandidateQueue() {
+        // Handle ICE candidates if they already arrived.
+        for (const candidate of this._iceCandidateQueue) {
+            await this._addIceCandidate(candidate);
+        }
+        this._iceCandidateQueue = [];
+    }
+
+    _signal(signal) {
+        const payload = BufferUtils.fromAscii(JSON.stringify(signal));
+        const keyPair = this._networkConfig.keyPair;
+        const peerId = this._networkConfig.peerId;
+        this._signalChannel.signal(
+            peerId,
+            this._peerId,
+            this._nonce,
+            Network.SIGNAL_TTL_INITIAL,
+            0, /*flags*/
+            payload,
+            keyPair.publicKey,
+            Signature.create(keyPair.privateKey, keyPair.publicKey, payload)
+        );
+    }
+
+    _onIceCandidate(event) {
+        if (event.candidate !== null) {
+            this._signal(event.candidate);
+        }
+    }
+
+    _onDescription(description) {
+        this._rtcConnection.setLocalDescription(description)
+            .then(() => this._signal(this._rtcConnection.localDescription))
+            .catch(Log.e.tag(PeerConnector));
+    }
+
+    _onDataChannel(event) {
+        const channel = new WebRtcDataChannel(event.channel || event.target);
+
+        // There is no API to get the remote IP address. As a crude heuristic, we parse the IP address
+        // from the last ICE candidate seen before the connection was established.
+        // TODO Can we improve this?
+        let netAddress = null;
+        if (this._lastIceCandidate) {
+            try {
+                netAddress = WebRtcUtils.candidateToNetAddress(this._lastIceCandidate);
+            } catch (e) {
+                Log.w(PeerConnector, `Failed to parse IP from ICE candidate: ${this._lastIceCandidate}`);
+            }
+        } else {
+            // XXX Why does this happen?
+            Log.w(PeerConnector, 'No ICE candidate seen for inbound connection');
+        }
+
+        const conn = new PeerConnection(channel, Protocol.RTC, netAddress, this._peerAddress);
+        this.fire('connection', conn);
+    }
+
+    get nonce() {
+        return this._nonce;
+    }
+
+    get peerAddress() {
+        return this._peerAddress;
+    }
+}
+Class.register(PeerConnector);
+
+class OutboundPeerConnector extends PeerConnector {
+    constructor(webRtcConfig, peerAddress, signalChannel) {
+        super(webRtcConfig, signalChannel, peerAddress.peerId, peerAddress);
+        this._peerAddress = peerAddress;
+
+        // Create offer.
+        const channel = this._rtcConnection.createDataChannel('data-channel');
+        channel.binaryType = 'arraybuffer';
+        channel.onopen = e => this._onDataChannel(e);
+        this._rtcConnection.createOffer()
+            .then(description => this._onDescription(description))
+            .catch(Log.e.tag(OutboundPeerConnector));
+    }
+}
+Class.register(OutboundPeerConnector);
+
+class InboundPeerConnector extends PeerConnector {
+    constructor(webRtcConfig, signalChannel, peerId, offer) {
+        super(webRtcConfig, signalChannel, peerId, null);
+        this._rtcConnection.ondatachannel = event => {
+            event.channel.onopen = e => this._onDataChannel(e);
+        };
+        this.onSignal(offer);
+    }
+}
+Class.register(InboundPeerConnector);
+
+class WebRtcDataChannel extends DataChannel {
+    /**
+     * @param {RTCDataChannel} nativeChannel
+     */
+    constructor(nativeChannel) {
+        super();
+        // We expect WebRtc data channels to be ordered.
+        Assert.that(nativeChannel.ordered, 'WebRtc data channel not ordered');
+        /** @type {RTCDataChannel} */
+        this._channel = nativeChannel;
+
+        this._channel.onmessage = msg => this._onMessage(msg.data || msg);
+        this._channel.onclose = () => this._onClose();
+        this._channel.onerror = e => this.fire('error', e, this);
+    }
+
+    /**
+     * @param {ArrayBuffer} msg
+     * @protected
+     * @override
+     */
+    _onMessage(msg) {
+        // FIXME It seems that Firefox still sometimes receives blobs instead of ArrayBuffers on RTC connections.
+        // FIXME FileReader is async and may RE-ORDER MESSAGES!
+        if (msg instanceof Blob) {
+            Log.e(DataChannel, 'Converting blob to ArrayBuffer on WebRtcDataChannel');
+            const reader = new FileReader();
+            reader.onloadend = () => super._onMessage(reader.result);
+            reader.readAsArrayBuffer(msg);
+        } else {
+            super._onMessage(msg);
+        }
+    }
+    /**
+     * @override
+     */
+    sendChunk(msg) {
+        this._channel.send(msg);
+    }
+
+    /**
+     * @override
+     */
+    close() {
+        this._channel.close();
+    }
+
+    /**
+     * @override
+     */
+    get readyState() {
+        return DataChannel.ReadyState.fromString(this._channel.readyState);
+    }
+}
+
+Class.register(WebRtcDataChannel);
+
+class WebRtcUtils {
+    static candidateToNetAddress(candidate) {
+        // TODO XXX Ad-hoc parsing of candidates - Improve!
+        const parts = candidate.candidate.split(' ');
+        if (parts.length < 6) {
+            return null;
+        }
+        return NetAddress.fromIP(parts[4]);
+    }
+}
+Class.register(WebRtcUtils);
+
 class WebSocketConnector extends Observable {
     /**
      * @constructor
@@ -28784,19 +28995,19 @@ class NetworkAgent extends Observable {
         // Check if the peer is running a compatible version.
         if (!Version.isCompatible(msg.version)) {
             this._channel.reject(Message.Type.VERSION, RejectMessage.Code.REJECT_OBSOLETE, `incompatible version (ours=${Version.CODE}, theirs=${msg.version})`);
-            this._channel.close(`incompatible version (ours=${Version.CODE}, theirs=${msg.version})`);
+            this._channel.ban(`incompatible version (ours=${Version.CODE}, theirs=${msg.version})`);
             return;
         }
 
         // Check if the peer is working on the same genesis block.
         if (!Block.GENESIS.HASH.equals(msg.genesisHash)) {
-            this._channel.close(`different genesis block (${msg.genesisHash})`);
+            this._channel.ban(`different genesis block (${msg.genesisHash})`);
             return;
         }
 
         // Check that the given peerAddress is correctly signed.
         if (!msg.peerAddress.verifySignature()) {
-            this._channel.close('invalid peerAddress in version message');
+            this._channel.ban('invalid peerAddress in version message');
             return;
         }
 
@@ -28809,7 +29020,7 @@ class NetworkAgent extends Observable {
         // to the peer's netAddress!
         if (this._channel.peerAddress) {
             if (!this._channel.peerAddress.equals(msg.peerAddress)) {
-                this._channel.close('unexpected peerAddress in version message');
+                this._channel.ban('unexpected peerAddress in version message');
                 return;
             }
             this._peerAddressVerified = true;
@@ -28885,14 +29096,14 @@ class NetworkAgent extends Observable {
 
         // Verify public key
         if (!msg.publicKey.toPeerId().equals(this._observedPeerAddress.peerId)) {
-            this._channel.close('Invalid public key in verack message');
+            this._channel.ban('Invalid public key in verack message');
             return;
         }
 
         // Verify signature
         const data = BufferUtils.concatTypedArrays(this._networkConfig.peerAddress.peerId.serialize(), this._challengeNonce);
         if (!msg.signature.verify(msg.publicKey, data)) {
-            this._channel.close('Invalid signature in verack message');
+            this._channel.ban('Invalid signature in verack message');
             return;
         }
 
@@ -31411,6 +31622,7 @@ class Miner extends Observable {
         this._totalElapsed = 0;
         this._lastHashrate = Date.now();
         this._hashrateWorker = setInterval(() => this._updateHashrate(), 1000);
+        this._retry = 0;
 
         // Tell listeners that we've started working.
         this.fire('start', this);
@@ -31430,11 +31642,16 @@ class Miner extends Observable {
             this._mempoolChanged = false;
 
             // Construct next block.
+            this._retry = 0;
             const block = await this.getNextBlock();
 
             Log.i(Miner, `Starting work on ${block.header}, transactionCount=${block.transactionCount}, hashrate=${this._hashrate} H/s`);
 
             this._workerPool.startMiningOnBlock(block).catch(Log.w.tag(Miner));
+        } catch (e) {
+            Log.w(Miner, 'Failed to start work, retrying in 100ms');
+            this.stopWork();
+            setTimeout(() => this.startWork(), 100);
         } finally {
             this._restarting = false;
         }
@@ -31478,11 +31695,19 @@ class Miner extends Observable {
      * @private
      */
     async getNextBlock() {
-        const nextTarget = await this._blockchain.getNextTarget();
-        const interlink = await this._getNextInterlink(nextTarget);
-        const body = await this._getNextBody(interlink.serializedSize);
-        const header = await this._getNextHeader(nextTarget, interlink, body);
-        return new Block(header, interlink, body);
+        this._retry++;
+        try {
+            const nextTarget = await this._blockchain.getNextTarget();
+            const interlink = await this._getNextInterlink(nextTarget);
+            const body = await this._getNextBody(interlink.serializedSize);
+            const header = await this._getNextHeader(nextTarget, interlink, body);
+            if ((await this._blockchain.getNextTarget()) !== nextTarget) return this.getNextBlock();
+            return new Block(header, interlink, body);
+        } catch (e) {
+            // Retry up to three times.
+            if (this._retry <= 3) return this.getNextBlock();
+            throw e;
+        }
     }
 
     /**
@@ -31806,7 +32031,11 @@ class MultiSigWallet extends Wallet {
     static fromPublicKeys(keyPair, minSignatures, publicKeys) {
         if (publicKeys.length === 0) throw new Error('publicKeys may not be empty');
         if (minSignatures <= 0) throw new Error('minSignatures must be greater than 0');
+        if (!publicKeys.some(key => key.equals(keyPair.publicKey))) throw new Error('Own publicKey must be part of publicKeys');
 
+        // Sort public keys so that the order when signing and construction does not matter.
+        publicKeys = publicKeys.slice();
+        publicKeys.sort((a, b) => a.compare(b));
         const combinations = [...ArrayUtils.k_combinations(publicKeys, minSignatures)];
         const multiSigKeys = combinations.map(arr => PublicKey.sum(arr));
         return new MultiSigWallet(keyPair, minSignatures, multiSigKeys);
@@ -31958,6 +32187,10 @@ class MultiSigWallet extends Wallet {
      * @returns {PartialSignature}
      */
     signTransaction(transaction, publicKeys, aggregatedCommitment, secret) {
+        // Sort public keys to get the right combined public key.
+        publicKeys = publicKeys.slice();
+        publicKeys.sort((a, b) => a.compare(b));
+
         return PartialSignature.create(this._keyPair.privateKey, this._keyPair.publicKey, publicKeys,
             secret, aggregatedCommitment, transaction.serializeContent());
     }
@@ -33293,7 +33526,11 @@ class CryptoWorkerImpl extends IWorker.Stub(CryptoWorker) {
      * @returns {Promise.<{valid: boolean, pow: SerialBuffer, interlinkHash: SerialBuffer, bodyHash: SerialBuffer}>}
      */
     async blockVerify(blockSerialized, timeNow, genesisHash) {
-        Block.GENESIS.HASH = Hash.unserialize(new SerialBuffer(genesisHash));
+        // XXX Create a stub genesis block within the worker.
+        if (!Block.GENESIS) {
+            Block.GENESIS = { HASH: Hash.unserialize(new SerialBuffer(genesisHash)) };
+        }
+
         const block = Block.unserialize(new SerialBuffer(blockSerialized));
         const valid = await block.computeVerify(timeNow);
         const pow = await block.header.pow();
