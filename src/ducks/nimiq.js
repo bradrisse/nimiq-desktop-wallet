@@ -33,7 +33,8 @@ export const types = {
     UPDATE_LAST_BLOCKTIME: "UPDATE_LAST_BLOCKTIME",
     ADD_MINED_BLOCK: "ADD_MINED_BLOCK",
     ADD_NIM: "ADD_NIM",
-    ADD_TRANSACTION: "ADD_TRANSACTION",
+    ADD_RECEIVING_TRANSACTION: "ADD_RECEIVING_TRANSACTION",
+    ADD_PENDING_TRANSACTION: "ADD_PENDING_TRANSACTION",
     UPDATE_PENDING_TRANSACTION: "UPDATE_PENDING_TRANSACTION",
     UPDATE_RECIEVING_TRANSACTION: "UPDATE_RECIEVING_TRANSACTION"
 };
@@ -78,7 +79,7 @@ export const initial = {
 
 
 export default function (state = initial, action) {
-    var _existingWallet, _existingWallet2, _selectedWallet, _wallets;
+    var _existingWallet, _selectedWallet, _wallets;
 
     switch (action.type) {
         case `${types.UPDATE_HASHRATE}`:
@@ -191,7 +192,7 @@ export default function (state = initial, action) {
                 _existingWallet.minedBlocks.push(action.payload.height)
             }
 
-            return {...state, wallets: customFunction(action.payload, state)}
+            return {...state, wallets: _wallets}
         case `${types.ADD_NIM}`:
             _wallets = state.wallets;
 
@@ -204,7 +205,7 @@ export default function (state = initial, action) {
             }
 
             return {...state, wallets: _wallets}
-        case `${types.ADD_TRANSACTION}`:
+        case `${types.ADD_RECEIVING_TRANSACTION}`:
             _wallets = state.wallets;
 
             _existingWallet = _.find(_wallets, (wallet) => {
@@ -215,16 +216,18 @@ export default function (state = initial, action) {
                 _existingWallet.transactions.push(action.payload);
                 _existingWallet.balance += action.payload.value;
             }
+            return {...state, wallets: _wallets}
+        case `${types.ADD_PENDING_TRANSACTION}`:
+            _wallets = state.wallets;
 
-            _existingWallet2 = _.find(_wallets, (wallet) => {
+            _existingWallet = _.find(_wallets, (wallet) => {
                 return wallet.address === action.payload.sender
             })
 
-            if (_existingWallet2) {
-                _existingWallet2.transactions.push(action.payload);
-                _existingWallet2.balance -= (action.payload.value + action.payload.fee);
+            if (_existingWallet) {
+                _existingWallet.transactions.push(action.payload);
+                _existingWallet.balance -= (action.payload.value + action.payload.fee);
             }
-
 
             return {...state, wallets: _wallets}
         default:
@@ -241,8 +244,12 @@ export const actions = {
         type: types.UPDATE_RECIEVING_TRANSACTION,
         payload: data
     }),
-    addTransaction: data => ({
-        type: types.ADD_TRANSACTION,
+    addReceivingTransaction: data => ({
+        type: types.ADD_RECEIVING_TRANSACTION,
+        payload: data
+    }),
+    addPendingTransaction: data => ({
+        type: types.ADD_PENDING_TRANSACTION,
         payload: data
     }),
     addNim: data => ({

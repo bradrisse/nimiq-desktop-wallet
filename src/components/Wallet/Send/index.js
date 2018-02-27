@@ -15,6 +15,8 @@ import { FormControl } from 'material-ui/Form';
 import {connect} from "react-redux";
 import { translate } from 'react-i18next';
 import { compose } from 'recompose';
+import {bindActionCreators} from "redux";
+import {actions as nimiqActions} from "../../../ducks/nimiq";
 import FullHeight from '../../../common/FullHeight';
 
 import Basic from './basic';
@@ -233,8 +235,14 @@ function mapStateToProps(state) {
     };
 }
 
+function mapPropsToDispatch(dispatch) {
+    return {
+        nimiqActions: bindActionCreators(nimiqActions, dispatch)
+    };
+}
+
 export default compose(
-    connect(mapStateToProps),
+    connect(mapStateToProps, mapPropsToDispatch),
     withStyles(styles),
     translate('translations')
 )(Send);

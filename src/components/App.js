@@ -221,11 +221,12 @@ class App extends React.Component {
     }
 
     _pendingTransactionConfirmed = () => {
+        const {nimiqActions} = this.props
         // if (_pendingInterval) {
         //     clearInterval(_pendingInterval);
         // }
         var transaction = this.props.nimiq.pendingTransaction;
-        this.props.nimiqActions.updatePendingTransaction(null);
+        nimiqActions.updatePendingTransaction(null);
         //this.props.nimiqActions.updateTransaction({estimatedTime: null});
 
         // this.setState({
@@ -235,7 +236,7 @@ class App extends React.Component {
         $.blockchain.getBlockAt(transaction._validityStartHeight).then((block) => {
             var _recipient = transaction.recipient.toUserFriendlyAddress();
             var _sender = transaction.sender.toUserFriendlyAddress();
-            this.props.nimiqActions.addTransaction({
+            nimiqActions.addPendingTransaction({
                 sender: _sender,
                 recipient: _recipient,
                 value: Nimiq.Policy.satoshisToCoins(transaction.value),
@@ -333,11 +334,9 @@ class App extends React.Component {
         console.log('_onTxsProcessed >>>')
         const {nimiq} = this.props;
         if (nimiq.pendingTransaction) {
-            nimiq.pendingTransaction.hash().then(hash => {
-                if (!$.mempool.getTransaction(hash)) {
-                    this._pendingTransactionConfirmed();
-                }
-            });
+            if (!$.mempool.getTransaction(nimiq.pendingTransaction._hash)) {
+                this._pendingTransactionConfirmed();
+            }
         }
 
         if (nimiq.receivingTransaction) {
@@ -353,7 +352,7 @@ class App extends React.Component {
         $.blockchain.getBlockAt(transaction._validityStartHeight).then((block) => {
             var _recipient = transaction.recipient.toUserFriendlyAddress();
             var _sender = transaction.sender.toUserFriendlyAddress();
-            this.props.nimiqActions.addTransaction({
+            this.props.nimiqActions.addReceivingTransaction({
                 sender: _sender,
                 recipient: _recipient,
                 value: Nimiq.Policy.satoshisToCoins(transaction.value),
