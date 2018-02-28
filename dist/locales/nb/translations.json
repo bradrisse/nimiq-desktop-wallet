@@ -1,0 +1,57 @@
+{
+    "header": {
+        "title":  "Nimiq Lommebok",
+        "status": "Status",
+        "connected": "Tilkoblet",
+        "notConnected": "Ikke tilkoblet"
+    },
+    "wallet": {
+        "title": "Lommebok",
+        "createWallet": "Lag lommebok",
+        "summary": {
+            "title": "Sammendrag"
+        },
+        "send": {
+            "title": "Send"
+        },
+        "receive": {
+            "title": "Motta"
+        },
+        "transactions": {
+            "title": "Transaksjoner"
+        },
+        "settings": {
+            "title": "Innstillinger"
+        }
+    },
+    "mining": {
+        "title": "Mining",
+        "toggle": "Toggle Mining",
+        "miningWallet": "Mining lommebok",
+        "hashRate": "Hash rate",
+        "global": "Global",
+        "average": "gjennomsnitt",
+        "nodes": "Noder",
+        "clients": "Klienter",
+        "last30": "Siste 30 dager",
+        "lastBlockTime": "Siste blokktid",
+        "totalBlocksMined": "Totalt antall blokker utvunnet",
+        "estimatedBlocks": "Estimerte blokker",
+        "upTime": "Oppetid"
+    },
+    "transactions": {
+        "title": "Transaksjoner",
+        "empty": "Ingen transaksjoner",
+        "emptyRecent": "Ingen nylige transaksjoner",
+        "infoModal": {
+            "title": "Transaksjonsinformasjon"
+        }
+    },
+    "settings": {
+        "title": "Innstillinger",
+        "language": "Språk"
+    },
+    "loading": {
+        "syncing": "Synkroniserer blokker"
+    }
+}
