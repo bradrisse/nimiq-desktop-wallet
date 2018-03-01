@@ -41,6 +41,10 @@ const styles = theme => ({
         height: '100%',
         backgroundColor: theme.palette.background.paper,
     },
+    paper: {
+        height: '100%',
+        background: theme.palette.bgColor
+    }
 });
 
 class Wallet extends React.Component {
@@ -64,7 +68,7 @@ class Wallet extends React.Component {
                     </Grid>
                     <Grid item xs={9}>
                         <FullHeight>
-                            <Paper style={{height: '100%', background: 'white'}}>
+                            <Paper className={classes.paper}>
                                 <AppBar position="static">
                                     <Tabs value={value} onChange={this.handleChange} fullWidth>
                                         <Tab icon={<SummaryIcon />} label={t('wallet.summary.title')} />

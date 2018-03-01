@@ -10,8 +10,12 @@ import FullHeight from '../common/FullHeight';
 import _ from 'lodash';
 import Dexie from 'dexie';
 import moment from 'moment';
+import { MuiThemeProvider, createMuiTheme } from 'material-ui/styles';
+import * as themes from '../themes';
 import '../assets/css/App.css';
 
+
+console.log('themes ', themes)
 
 const $ = {};
 var db;
@@ -48,6 +52,9 @@ class App extends React.Component {
         db.open().catch(function (error) {
             alert('Uh oh : ' + error);
         });
+
+        var _theme = window.localStorage.getItem('theme');
+        this.props.nimiqActions.updateTheme(_theme);
     }
 
     componentWillReceiveProps(nextProps) {
@@ -282,6 +289,15 @@ class App extends React.Component {
 
         const txFees = block.body.transactions.reduce((sum, tx) => sum + tx.fee, 0);
        this.props.nimiqActions.addNim({nim: Nimiq.Policy.satoshisToCoins(txFees + Nimiq.Policy.blockRewardAt(block.height)), addr: block.minerAddr.toUserFriendlyAddress()})
+
+        // var _share = {
+        //     message: 'share',
+        //     blockHeader: Nimiq.BufferUtils.toBase64(block.header.serialize()),
+        //     minerAddrProof: Nimiq.BufferUtils.toBase64((Nimiq.MerklePath.compute(block.body.getMerkleLeafs(), block.minerAddr)).serialize()),
+        //     extraDataProof: Nimiq.BufferUtils.toBase64((Nimiq.MerklePath.compute(block.body.getMerkleLeafs(), block.body.extraData)).serialize())
+        // }
+        //
+        // console.log('_share ', _share)
     };
 
     _onHashrateChanged() {
@@ -457,9 +473,10 @@ class App extends React.Component {
                         });
                     return $.blockchain.getTransactionReceiptsByAddress(address).then((transactions) => {
                         if (transactions.length > 0) {
-                            _.each(transactions, (transaction) => {
-                                $.consensus.blockchain.getBlock(transaction.blockHash).then((block) => {
+                            _.each(transactions, (_transaction) => {
+                                $.consensus.blockchain.getBlock(_transaction.blockHash).then((block) => {
                                     _.each(block.body.transactions, (transaction) => {
+                                        console.log('transaction ', transaction);
                                         var _recipient = transaction.recipient.toUserFriendlyAddress();
                                         var _sender = transaction.sender.toUserFriendlyAddress();
                                         var currentAddress = address.toUserFriendlyAddress();
@@ -553,14 +570,17 @@ class App extends React.Component {
     }
 
     render() {
-        const {nimiq} = this.props
+        const {nimiq} = this.props;
+        console.log('nimiq ', nimiq)
         return (
-            <FullHeight>
-                <Messages />
-                {!nimiq.isConsensusEstablished && <Loading/>}
-                {nimiq.isConsensusEstablished && !nimiq.setupComplete && <Setup/>}
-                {nimiq.isConsensusEstablished && nimiq.setupComplete && <Drawer/>}
-            </FullHeight>
+            <MuiThemeProvider theme={createMuiTheme(themes.default[nimiq.theme])}>
+                <FullHeight>
+                    <Messages />
+                    {!nimiq.isConsensusEstablished && <Loading/>}
+                    {nimiq.isConsensusEstablished && !nimiq.setupComplete && <Setup/>}
+                    {nimiq.isConsensusEstablished && nimiq.setupComplete && <Drawer/>}
+                </FullHeight>
+            </MuiThemeProvider>
         );
     }
 }

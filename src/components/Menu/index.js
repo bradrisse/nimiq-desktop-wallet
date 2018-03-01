@@ -14,7 +14,7 @@ const styles = theme => ({
     root: {
         width: '100%',
         maxWidth: 360,
-        backgroundColor: '#E7E5EF',
+        backgroundColor: theme.palette.bgColor,
     },
     link: {
         textDecoration: 'none'

@@ -36,7 +36,8 @@ export const types = {
     ADD_RECEIVING_TRANSACTION: "ADD_RECEIVING_TRANSACTION",
     ADD_PENDING_TRANSACTION: "ADD_PENDING_TRANSACTION",
     UPDATE_PENDING_TRANSACTION: "UPDATE_PENDING_TRANSACTION",
-    UPDATE_RECIEVING_TRANSACTION: "UPDATE_RECIEVING_TRANSACTION"
+    UPDATE_RECIEVING_TRANSACTION: "UPDATE_RECIEVING_TRANSACTION",
+    UPDATE_THEME: "UPDATE_THEME"
 };
 
 export const initial = {
@@ -73,7 +74,8 @@ export const initial = {
     averageBlockTime: null,
     lastBockTime: null,
     pendingTransaction: null,
-    receivingTransaction: null
+    receivingTransaction: null,
+    theme: 'default'
 };
 
 
@@ -230,12 +232,18 @@ export default function (state = initial, action) {
             }
 
             return {...state, wallets: _wallets}
+        case `${types.UPDATE_THEME}`:
+            return {...state, theme: action.payload};
         default:
             return state;
     }
 }
 
 export const actions = {
+    updateTheme: data => ({
+        type: types.UPDATE_THEME,
+        payload: data
+    }),
     updatePendingTransaction: data => ({
         type: types.UPDATE_PENDING_TRANSACTION,
         payload: data
