@@ -7837,7 +7837,8 @@ class DataChannel extends Observable {
      * @param {string} msg
      * @private
      */
-    _onError(msg) {
+    _error(msg) {
+        this.fire('error', msg, this);
         Log.e(DataChannel, msg);
         this.close();
     }
@@ -7848,18 +7849,20 @@ class DataChannel extends Observable {
      */
     _onMessage(msg) {
         try {
-            // Blindly forward empty messages.
-            // TODO should we drop them instead?
+            // Drop message if the channel is not open.
+            if (this.readyState !== DataChannel.ReadyState.OPEN) {
+                return;
+            }
+
+            // Drop empty messages.
             const buffer = new SerialBuffer(msg);
             if (buffer.byteLength === 0) {
-                Log.w(DataChannel, 'Received empty message', buffer, msg);
-                this.fire('message', msg, this);
                 return;
             }
 
             // Chunk is too large.
             if (buffer.byteLength > DataChannel.CHUNK_SIZE_MAX) {
-                this._onError('Received chunk larger than maximum chunk size, discarding');
+                this._error('Received chunk larger than maximum chunk size, discarding');
                 return;
             }
 
@@ -7875,7 +7878,7 @@ class DataChannel extends Observable {
                 const messageSize = Message.peekLength(chunkBuffer);
 
                 if (messageSize > DataChannel.MESSAGE_SIZE_MAX) {
-                    this._onError(`Received message with excessive message size ${messageSize} > ${DataChannel.MESSAGE_SIZE_MAX}`);
+                    this._error(`Received message with excessive message size ${messageSize} > ${DataChannel.MESSAGE_SIZE_MAX}`);
                     return;
                 }
 
@@ -7891,7 +7894,7 @@ class DataChannel extends Observable {
 
             // Currently, we only support one message at a time.
             if (tag !== this._receivingTag) {
-                this._onError(`Received message with wrong message tag ${tag}, expected ${this._receivingTag}`);
+                this._error(`Received message with wrong message tag ${tag}, expected ${this._receivingTag}`);
                 return;
             }
 
@@ -7899,7 +7902,7 @@ class DataChannel extends Observable {
 
             // Mismatch between buffer sizes.
             if (effectiveChunkLength > remainingBytes) {
-                this._onError('Received chunk larger than remaining bytes to read, discarding');
+                this._error('Received chunk larger than remaining bytes to read, discarding');
                 return;
             }
 
@@ -7928,7 +7931,7 @@ class DataChannel extends Observable {
                 this.fire('chunk', this._buffer);
             }
         } catch (e) {
-            this._onError(`Error occured while parsing incoming message, ${e.message}`);
+            this._error(`Error occurred while parsing incoming message, ${e.message}`);
         }
     }
 
@@ -9594,12 +9597,13 @@ class Crypto {
 
     /**
      * @param {Uint8Array} block
+     * @param {Array.<bool>} transactionValid
      * @param {number} timeNow
      * @returns {Promise.<{valid: boolean, pow: SerialBuffer, interlinkHash: SerialBuffer, bodyHash: SerialBuffer}>}
      */
-    static async blockVerify(block, timeNow) {
+    static async blockVerify(block, transactionValid, timeNow) {
         const worker = await Crypto._cryptoWorkerAsync();
-        return worker.blockVerify(block, timeNow, Block.GENESIS.HASH.serialize());
+        return worker.blockVerify(block, transactionValid, timeNow, Block.GENESIS.HASH.serialize());
     }
 
 
@@ -10660,15 +10664,6 @@ class Policy {
         const remainder = remaining % Policy.EMISSION_SPEED;
         return (remaining - remainder) / Policy.EMISSION_SPEED;
     }
-
-    /**
-     * The highest (easiest) block PoW target.
-     * @type {number}
-     * @constant
-     */
-    static get BLOCK_TARGET_MAX() {
-        return Math.pow(2, 240);
-    }
 }
 
 /**
@@ -10684,6 +10679,13 @@ Policy.BLOCK_TIME = 60;
  * @constant
  */
 Policy.BLOCK_SIZE_MAX = 1e6; // 1 MB
+
+/**
+ * The highest (easiest) block PoW target.
+ * @type {number}
+ * @constant
+ */
+Policy.BLOCK_TARGET_MAX = Math.pow(2, 240);
 
 /**
  * Number of blocks we take into account to calculate next difficulty.
@@ -15744,7 +15746,6 @@ class BlockBody {
     }
 
     /**
-     * @return {Promise.<Hash>}
      * @return {Hash}
      */
     hash() {
@@ -16250,6 +16251,17 @@ class Transaction {
      * @returns {boolean}
      */
     verify() {
+        if (this._valid === undefined) {
+            this._valid = this._verify();
+        }
+        return this._valid;
+    }
+
+    /**
+     * @returns {boolean}
+     * @private
+     */
+    _verify() {
         // Check that sender != recipient.
         if (this._recipient.equals(this._sender)) {
             Log.w(Transaction, 'Sender and recipient must not match', this);
@@ -17386,9 +17398,10 @@ class Block {
         if (this._valid === undefined) {
             if (this.isLight() || this.body.transactions.length < 150 || !IWorker.areWorkersAsync) {
                 // worker overhead doesn't pay off for small transaction numbers
-                this._valid = await this.computeVerify(time.now());
+                this._valid = await this._verify(time.now());
             } else {
-                const {valid, pow, interlinkHash, bodyHash} = await Crypto.blockVerify(this.serialize(), time.now());
+                const transactionValid = this.body.transactions.map(t => t._valid);
+                const {valid, pow, interlinkHash, bodyHash} = await Crypto.blockVerify(this.serialize(), transactionValid, time.now());
                 this._valid = valid;
                 this.header._pow = Hash.unserialize(new SerialBuffer(pow));
                 this.interlink._hash = Hash.unserialize(new SerialBuffer(interlinkHash));
@@ -17402,7 +17415,7 @@ class Block {
      * @param {number} timeNow
      * @returns {Promise.<boolean>}
      */
-    async computeVerify(timeNow) {
+    async _verify(timeNow) {
         // Check that the timestamp is not too far into the future.
         if (this._header.timestamp * 1000 > timeNow + Block.TIMESTAMP_DRIFT_MAX * 1000) {
             Log.w(Block, 'Invalid block - timestamp too far in the future');
@@ -19701,6 +19714,16 @@ class BaseConsensusAgent extends Observable {
             return;
         }
 
+        // Reuse already known (verified) transactions
+        const transactions = msg.block.isFull() ? msg.block.body.transactions : [];
+        const transactionPromises = transactions.map(t => this._getTransaction(t.hash()));
+        for (let i = 0; i < transactions.length; i++) {
+            const transaction = await transactionPromises[i]; // eslint-disable-line no-await-in-loop
+            if (transaction) {
+                transactions[i] = transaction;
+            }
+        }
+
         // Mark object as received.
         this._onObjectReceived(vector);
 
@@ -20785,7 +20808,7 @@ class FullConsensusAgent extends BaseConsensusAgent {
         // This sets a maximum length for forks that the full client will accept:
         //   FullConsensusAgent.SYNC_ATTEMPTS_MAX * BaseInvectoryMessage.VECTORS_MAX_COUNT
         if (this._numBlocksExtending === 0 && ++this._failedSyncs >= FullConsensusAgent.SYNC_ATTEMPTS_MAX) {
-            this._peer.channel.ban('blockchain sync failed');
+            this._peer.channel.close(CloseType.BLOCKCHAIN_SYNC_FAILED, 'blockchain sync failed');
             return;
         }
 
@@ -20824,7 +20847,7 @@ class FullConsensusAgent extends BaseConsensusAgent {
         // Drop the peer if it doesn't start sending InvVectors for its chain within the timeout.
         // Set timeout early to prevent re-entering the method.
         this._peer.channel.expectMessage(Message.Type.INV, () => {
-            this._peer.channel.close('getBlocks timeout');
+            this._peer.channel.close(CloseType.GET_BLOCKS_TIMEOUT, 'getBlocks timeout');
         }, BaseConsensusAgent.REQUEST_TIMEOUT);
 
         // Check if the peer is sending us a fork.
@@ -20974,7 +20997,7 @@ class FullConsensusAgent extends BaseConsensusAgent {
         const status = await this._blockchain.pushBlock(block);
         switch (status) {
             case FullChain.ERR_INVALID:
-                this._peer.channel.ban('received invalid block');
+                this._peer.channel.close(CloseType.RECEIVED_INVALID_BLOCK, 'received invalid block');
                 break;
 
             case FullChain.OK_EXTENDED:
@@ -21544,7 +21567,7 @@ class LightConsensusAgent extends FullConsensusAgent {
 
         // Ban peer if the sync failed more often than allowed.
         if (this._failedSyncs >= LightConsensusAgent.SYNC_ATTEMPTS_MAX) {
-            this._peer.channel.ban('blockchain sync failed');
+            this._peer.channel.close(CloseType.BLOCKCHAIN_SYNC_FAILED, 'blockchain sync failed');
             if (this._partialChain) {
                 await this._partialChain.abort();
                 this._partialChain = null;
@@ -21580,7 +21603,7 @@ class LightConsensusAgent extends FullConsensusAgent {
             try {
                 header = await this.getHeader(this._syncTarget);
             } catch(err) {
-                this._peer.channel.close('Did not get requested header');
+                this._peer.channel.close(CloseType.DID_NOT_GET_REQUESTED_HEADER, 'Did not get requested header');
                 return;
             }
 
@@ -21621,7 +21644,7 @@ class LightConsensusAgent extends FullConsensusAgent {
                         this._syncFinished();
                         break;
                     case PartialLightChain.State.ABORTED:
-                        this._peer.channel.close('aborted sync');
+                        this._peer.channel.close(CloseType.ABORTED_SYNC, 'aborted sync');
                         break;
                 }
             }
@@ -21669,7 +21692,7 @@ class LightConsensusAgent extends FullConsensusAgent {
         for (const block of this._orphanedBlocks) {
             const status = await this._blockchain.pushBlock(block);
             if (status === LightChain.ERR_INVALID) {
-                this._peer.channel.ban('received invalid block');
+                this._peer.channel.close(CloseType.RECEIVED_INVALID_BLOCK, 'received invalid block');
                 break;
             }
         }
@@ -21694,7 +21717,7 @@ class LightConsensusAgent extends FullConsensusAgent {
         // Drop the peer if it doesn't send the chain proof within the timeout.
         // TODO should we ban here instead?
         this._peer.channel.expectMessage(Message.Type.CHAIN_PROOF, () => {
-            this._peer.channel.close('getChainProof timeout');
+            this._peer.channel.close(CloseType.GET_CHAIN_PROOF_TIMEOUT, 'getChainProof timeout');
         }, LightConsensusAgent.CHAINPROOF_REQUEST_TIMEOUT, LightConsensusAgent.CHAINPROOF_CHUNK_TIMEOUT);
     }
 
@@ -21723,7 +21746,7 @@ class LightConsensusAgent extends FullConsensusAgent {
         if (!(await this._partialChain.pushProof(msg.proof))) {
             Log.w(LightConsensusAgent, `Invalid chain proof received from ${this._peer.peerAddress} - verification failed`);
             // TODO ban instead?
-            this._peer.channel.close('invalid chain proof');
+            this._peer.channel.close(CloseType.INVALID_CHAIN_PROOF, 'invalid chain proof');
             return;
         }
 
@@ -21755,7 +21778,7 @@ class LightConsensusAgent extends FullConsensusAgent {
 
         // Drop the peer if it doesn't send the accounts proof within the timeout.
         this._peer.channel.expectMessage(Message.Type.ACCOUNTS_TREE_CHUNK, () => {
-            this._peer.channel.close('getAccountsTreeChunk timeout');
+            this._peer.channel.close(CloseType.GET_ACCOUNTS_TREE_CHUNK_TIMEOUT, 'getAccountsTreeChunk timeout');
         }, LightConsensusAgent.ACCOUNTS_TREE_CHUNK_REQUEST_TIMEOUT);
     }
 
@@ -21794,7 +21817,7 @@ class LightConsensusAgent extends FullConsensusAgent {
         // Check that we know the reference block.
         if (!blockHash.equals(msg.blockHash) || msg.chunk.head.prefix <= startPrefix) {
             Log.w(LightConsensusAgent, `Received AccountsTreeChunk for block != head or wrong start prefix from ${this._peer.peerAddress}`);
-            this._peer.channel.close('Invalid AccountsTreeChunk');
+            this._peer.channel.close(CloseType.INVALID_ACCOUNTS_TREE_CHUNK, 'Invalid AccountsTreeChunk');
             return;
         }
 
@@ -21803,7 +21826,7 @@ class LightConsensusAgent extends FullConsensusAgent {
         if (!chunk.verify()) {
             Log.w(LightConsensusAgent, `Invalid AccountsTreeChunk received from ${this._peer.peerAddress}`);
             // TODO ban instead?
-            this._peer.channel.close('Invalid AccountsTreeChunk');
+            this._peer.channel.close(CloseType.INVALID_ACCOUNTS_TREE_CHUNK, 'Invalid AccountsTreeChunk');
             return;
         }
 
@@ -21813,7 +21836,7 @@ class LightConsensusAgent extends FullConsensusAgent {
         if (!block.accountsHash.equals(rootHash)) {
             Log.w(LightConsensusAgent, `Invalid AccountsTreeChunk (root hash) received from ${this._peer.peerAddress}`);
             // TODO ban instead?
-            this._peer.channel.close('AccountsTreeChunk root hash mismatch');
+            this._peer.channel.close(CloseType.ACCOUNTS_TREE_CHUNCK_ROOT_HASH_MISMATCH, 'AccountsTreeChunk root hash mismatch');
             return;
         }
 
@@ -21824,7 +21847,7 @@ class LightConsensusAgent extends FullConsensusAgent {
         if (result < 0) {
             // TODO maybe ban?
             Log.e(`AccountsTree sync failed with error code ${result} from ${this._peer.peerAddress}`);
-            this._peer.channel.close('AccountsTreeChunk root hash mismatch');
+            this._peer.channel.close(CloseType.ACCOUNTS_TREE_CHUNCK_ROOT_HASH_MISMATCH, 'AccountsTreeChunk root hash mismatch');
         }
 
         this._busy = false;
@@ -21852,7 +21875,7 @@ class LightConsensusAgent extends FullConsensusAgent {
 
         // Drop the peer if it doesn't start sending InvVectors for its chain within the timeout.
         this._peer.channel.expectMessage(Message.Type.INV, () => {
-            this._peer.channel.close('getBlocks timeout');
+            this._peer.channel.close(CloseType.GET_BLOCKS_TIMEOUT, 'getBlocks timeout');
         }, BaseConsensusAgent.REQUEST_TIMEOUT);
 
         // Request blocks from peer.
@@ -21896,7 +21919,7 @@ class LightConsensusAgent extends FullConsensusAgent {
 
         switch (status) {
             case FullChain.ERR_INVALID:
-                this._peer.channel.ban('received invalid block');
+                this._peer.channel.close(CloseType.RECEIVED_INVALID_BLOCK, 'received invalid block');
                 break;
 
             case FullChain.OK_EXTENDED:
@@ -21976,7 +21999,7 @@ class LightConsensusAgent extends FullConsensusAgent {
             // Drop the peer if it doesn't send the accounts proof within the timeout.
             this._peer.channel.expectMessage(Message.Type.HEADER, () => {
                 this._headerRequest = null;
-                this._peer.channel.close('getHeader timeout');
+                this._peer.channel.close(CloseType.GET_HEADER_TIMEOUT, 'getHeader timeout');
                 reject(new Error('timeout')); // TODO error handling
             }, BaseConsensusAgent.REQUEST_TIMEOUT);
         });
@@ -22006,7 +22029,7 @@ class LightConsensusAgent extends FullConsensusAgent {
         // Check that it is the correct hash.
         if (!requestedHash.equals(hash)) {
             Log.w(LightConsensusAgent, `Received wrong header from ${this._peer.peerAddress}`);
-            this._peer.channel.close('Received wrong header');
+            this._peer.channel.close(CloseType.RECEIVED_WRONG_HEADER, 'Received wrong header');
             reject(new Error('Received wrong header'));
             return;
         }
@@ -23003,6 +23026,11 @@ class NanoChain extends BaseChain {
         }
     }
 
+    /**
+     * @param {Block} block
+     * @returns {Promise.<number>}
+     * @private
+     */
     async _pushBlock(block) {
         // Check if we already know this header/block.
         const hash = await block.hash();
@@ -23340,7 +23368,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
 
         // Drop the peer if it doesn't send the chain proof within the timeout.
         this._peer.channel.expectMessage(Message.Type.CHAIN_PROOF, () => {
-            this._peer.channel.close('getChainProof timeout');
+            this._peer.channel.close(CloseType.GET_CHAIN_PROOF_TIMEOUT, 'getChainProof timeout');
         }, NanoConsensusAgent.CHAINPROOF_REQUEST_TIMEOUT, NanoConsensusAgent.CHAINPROOF_CHUNK_TIMEOUT);
     }
 
@@ -23369,7 +23397,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
         if (!(await this._blockchain.pushProof(msg.proof))) {
             Log.w(NanoConsensusAgent, `Invalid chain proof received from ${this._peer.peerAddress} - verification failed`);
             // TODO ban instead?
-            this._peer.channel.close('invalid chain proof');
+            this._peer.channel.close(CloseType.INVALID_CHAIN_PROOF, 'invalid chain proof');
             return;
         }
 
@@ -23391,7 +23419,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
         for (const header of this._orphanedBlocks) {
             const status = await this._blockchain.pushHeader(header);
             if (status === NanoChain.ERR_INVALID) {
-                this._peer.channel.ban('received invalid block');
+                this._peer.channel.close(CloseType.RECEIVED_INVALID_BLOCK, 'received invalid block');
                 break;
             }
         }
@@ -23454,7 +23482,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
         // TODO send reject message if we don't like the block
         const status = await this._blockchain.pushHeader(header);
         if (status === NanoChain.ERR_INVALID) {
-            this._peer.channel.ban('received invalid header');
+            this._peer.channel.close(CloseType.RECEIVED_INVALID_HEADER, 'received invalid header');
         }
         // Re-sync with this peer if it starts sending orphan blocks after the initial sync.
         else if (status === NanoChain.ERR_ORPHAN) {
@@ -23474,7 +23502,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
      */
     _processTransaction(hash, transaction) {
         if (!this._localSubscription.matchesTransaction(transaction)) {
-            this._peer.channel.ban('received transaction not matching our subscription');
+            this._peer.channel.close(CloseType.RECEIVED_TRANSACTION_NOT_MATCHING_OUR_SUBSCRIPTION, 'received transaction not matching our subscription');
         }
         return this._mempool.pushTransaction(transaction);
     }
@@ -23525,7 +23553,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
 
             // Drop the peer if it doesn't send the accounts proof within the timeout.
             this._peer.channel.expectMessage(Message.Type.ACCOUNTS_PROOF, () => {
-                this._peer.channel.close('getAccountsProof timeout');
+                this._peer.channel.close(CloseType.GET_ACCOUNTS_PROOF_TIMEOUT, 'getAccountsProof timeout');
                 reject(new Error('timeout')); // TODO error handling
             }, NanoConsensusAgent.ACCOUNTSPROOF_REQUEST_TIMEOUT);
         });
@@ -23571,7 +23599,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
         if (!proof.verify()) {
             Log.w(NanoConsensusAgent, `Invalid AccountsProof received from ${this._peer.peerAddress}`);
             // TODO ban instead?
-            this._peer.channel.close('Invalid AccountsProof');
+            this._peer.channel.close(CloseType.INVALID_ACCOUNTS_PROOF, 'Invalid AccountsProof');
             reject(new Error('Invalid AccountsProof'));
             return;
         }
@@ -23582,7 +23610,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
         if (!block.accountsHash.equals(rootHash)) {
             Log.w(NanoConsensusAgent, `Invalid AccountsProof (root hash) received from ${this._peer.peerAddress}`);
             // TODO ban instead?
-            this._peer.channel.close('AccountsProof root hash mismatch');
+            this._peer.channel.close(CloseType.ACCOUNTS_PROOF_ROOT_HASH_MISMATCH, 'AccountsProof root hash mismatch');
             reject(new Error('AccountsProof root hash mismatch'));
             return;
         }
@@ -23597,7 +23625,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
             } catch (e) {
                 Log.w(NanoConsensusAgent, `Incomplete AccountsProof received from ${this._peer.peerAddress}`);
                 // TODO ban instead?
-                this._peer.channel.close('Incomplete AccountsProof');
+                this._peer.channel.close(CloseType.INCOMPLETE_ACCOUNTS_PROOF, 'Incomplete AccountsProof');
                 reject(new Error('Incomplete AccountsProof'));
                 return;
             }
@@ -23650,7 +23678,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
 
             // Drop the peer if it doesn't send the accounts proof within the timeout.
             this._peer.channel.expectMessage(Message.Type.TRANSACTIONS_PROOF, () => {
-                this._peer.channel.close('getTransactionsProof timeout');
+                this._peer.channel.close(CloseType.GET_TRANSACTIONS_PROOF_TIMEOUT, 'getTransactionsProof timeout');
                 reject(new Error('timeout')); // TODO error handling
             }, NanoConsensusAgent.TRANSACTIONSPROOF_REQUEST_TIMEOUT);
         });
@@ -23698,7 +23726,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
         if (!header.bodyHash.equals(proof.root())) {
             Log.w(NanoConsensusAgent, `Invalid TransactionsProof received from ${this._peer.peerAddress}`);
             // TODO ban instead?
-            this._peer.channel.close('Invalid TransactionsProof');
+            this._peer.channel.close(CloseType.INVALID_TRANSACTION_PROOF, 'Invalid TransactionsProof');
             reject(new Error('Invalid TransactionsProof'));
             return;
         }
@@ -23715,7 +23743,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
         this._requestedTransactionReceipts = true;
 
         this._peer.channel.expectMessage(Message.Type.TRANSACTION_RECEIPTS, () => {
-            this._peer.channel.close('getTransactionReceipts timeout');
+            this._peer.channel.close(CloseType.GET_TRANSACTION_RECEIPTS_TIMEOUT, 'getTransactionReceipts timeout');
         }, NanoConsensusAgent.TRANSACTIONS_REQUEST_TIMEOUT);
     }
 
@@ -23812,7 +23840,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
         if (!(await msg.block.verify(this._time))) {
             Log.w(NanoConsensusAgent, `Invalid block received from ${this._peer.peerAddress}`);
             // TODO ban instead?
-            this._peer.channel.close('Invalid block');
+            this._peer.channel.close(CloseType.INVALID_BLOCK, 'Invalid block');
             reject(new Error('Invalid block'));
             return;
         }
@@ -24525,1697 +24553,6 @@ Protocol.DUMB = 0;
 Protocol.WS = 1;
 Protocol.RTC = 2;
 Class.register(Protocol);
-
-class NetAddress {
-    /**
-     * @param {string} ip
-     * @return {NetAddress}
-     */
-    static fromIP(ip) {
-        const saneIp = NetUtils.sanitizeIP(ip);
-        return new NetAddress(saneIp);
-    }
-
-    /**
-     * @param {string} ip
-     */
-    constructor(ip) {
-        /** @type {string} */
-        this._ip = ip;
-    }
-
-    /**
-     * @param {SerialBuffer} buf
-     * @return {NetAddress}
-     */
-    static unserialize(buf) {
-        const ip = buf.readVarLengthString();
-
-        // Allow empty NetAddresses.
-        if (!ip) {
-            return NetAddress.UNSPECIFIED;
-        }
-
-        return NetAddress.fromIP(ip);
-    }
-
-    /**
-     * @param {?SerialBuffer} [buf]
-     * @return {SerialBuffer}
-     */
-    serialize(buf) {
-        buf = buf || new SerialBuffer(this.serializedSize);
-        buf.writeVarLengthString(this._ip);
-        return buf;
-    }
-
-    /** @type {number} */
-    get serializedSize() {
-        return SerialBuffer.varLengthStringSize(this._ip);
-    }
-
-    /**
-     * @param {NetAddress} o
-     * @return {boolean}
-     */
-    equals(o) {
-        return o instanceof NetAddress
-            && this._ip === o.ip;
-    }
-
-    hashCode() {
-        return this.toString();
-    }
-
-    /**
-     * @return {string}
-     */
-    toString() {
-        return `${this._ip}`;
-    }
-
-    /** @type {string} */
-    get ip() {
-        return this._ip;
-    }
-
-    /**
-     * @return {boolean}
-     */
-    isPseudo() {
-        return !this._ip || NetAddress.UNKNOWN.equals(this);
-    }
-
-    /**
-     * @return {boolean}
-     */
-    isPrivate() {
-        return this.isPseudo() || NetUtils.isPrivateIP(this._ip);
-    }
-}
-NetAddress.UNSPECIFIED = new NetAddress('');
-NetAddress.UNKNOWN = new NetAddress('<unknown>');
-Class.register(NetAddress);
-
-class PeerId extends Primitive {
-    /**
-     * @param {PeerId} o
-     * @returns {PeerId}
-     */
-    static copy(o) {
-        if (!o) return o;
-        const obj = new Uint8Array(o._obj);
-        return new PeerId(obj);
-    }
-
-    constructor(arg) {
-        super(arg, Uint8Array, PeerId.SERIALIZED_SIZE);
-    }
-
-    /**
-     * Create Address object from binary form.
-     * @param {SerialBuffer} buf Buffer to read from.
-     * @return {PeerId} Newly created Account object.
-     */
-    static unserialize(buf) {
-        return new PeerId(buf.read(PeerId.SERIALIZED_SIZE));
-    }
-
-    /**
-     * Serialize this Address object into binary form.
-     * @param {?SerialBuffer} [buf] Buffer to write to.
-     * @return {SerialBuffer} Buffer from `buf` or newly generated one.
-     */
-    serialize(buf) {
-        buf = buf || new SerialBuffer(this.serializedSize);
-        buf.write(this._obj);
-        return buf;
-    }
-
-    subarray(begin, end) {
-        return this._obj.subarray(begin, end);
-    }
-
-    /**
-     * @type {number}
-     */
-    get serializedSize() {
-        return PeerId.SERIALIZED_SIZE;
-    }
-
-    /**
-     * @param {Primitive} o
-     * @return {boolean}
-     */
-    equals(o) {
-        return o instanceof PeerId
-            && super.equals(o);
-    }
-
-    /**
-     * @returns {string}
-     * @override
-     */
-    toString() {
-        return this.toHex();
-    }
-
-    /**
-     * @param {string} base64
-     * @return {PeerId}
-     */
-    static fromBase64(base64) {
-        return new PeerId(BufferUtils.fromBase64(base64));
-    }
-
-    /**
-     * @param {string} hex
-     * @return {PeerId}
-     */
-    static fromHex(hex) {
-        return new PeerId(BufferUtils.fromHex(hex));
-    }
-}
-
-PeerId.SERIALIZED_SIZE = 16;
-Class.register(PeerId);
-
-class PeerAddress {
-    /**
-     * @param {number} protocol
-     * @param {number} services
-     * @param {number} timestamp
-     * @param {NetAddress} netAddress
-     * @param {PublicKey} publicKey
-     * @param {number} distance
-     * @param {Signature} [signature]
-     */
-    constructor(protocol, services, timestamp, netAddress, publicKey, distance, signature) {
-        if (!NumberUtils.isUint8(distance)) throw new Error('Malformed distance');
-        if (publicKey !== null && !(publicKey instanceof PublicKey)) throw new Error('Malformed publicKey');
-
-        /** @type {number} */
-        this._protocol = protocol;
-        /** @type {number} */
-        this._services = services;
-        /** @type {number} */
-        this._timestamp = timestamp;
-        /** @type {NetAddress} */
-        this._netAddress = netAddress || NetAddress.UNSPECIFIED;
-        /** @type {PublicKey} */
-        this._publicKey = publicKey;
-        /** @type {number} */
-        this._distance = distance;
-        /** @type {?Signature} */
-        this._signature = signature;
-    }
-
-    /**
-     * @param {SerialBuffer} buf
-     * @returns {PeerAddress}
-     */
-    static unserialize(buf) {
-        const protocol = buf.readUint8();
-        switch (protocol) {
-            case Protocol.WS:
-                return WsPeerAddress.unserialize(buf);
-
-            case Protocol.RTC:
-                return RtcPeerAddress.unserialize(buf);
-
-            case Protocol.DUMB:
-                return DumbPeerAddress.unserialize(buf);
-
-            default:
-                throw `Malformed PeerAddress protocol ${protocol}`;
-        }
-    }
-
-    /**
-     * @param {SerialBuffer} [buf]
-     * @returns {SerialBuffer}
-     */
-    serialize(buf) {
-        if (!this._publicKey) throw new Error('PeerAddress without publicKey may not be serialized.');
-        if (!this._signature) throw new Error('PeerAddress without signature may not be serialized.');
-
-        buf = buf || new SerialBuffer(this.serializedSize);
-        buf.writeUint8(this._protocol);
-        buf.writeUint32(this._services);
-        buf.writeUint64(this._timestamp);
-
-        // Never serialize private netAddresses.
-        if (this._netAddress.isPrivate()) {
-            NetAddress.UNSPECIFIED.serialize(buf);
-        } else {
-            this._netAddress.serialize(buf);
-        }
-
-        this._publicKey.serialize(buf);
-        buf.writeUint8(this._distance);
-        this._signature.serialize(buf);
-
-        return buf;
-    }
-
-    serializeContent(buf) {
-        buf = buf || new SerialBuffer(this.serializedContentSize);
-
-        buf.writeUint8(this._protocol);
-        buf.writeUint32(this._services);
-        buf.writeUint64(this._timestamp);
-
-        return buf;
-    }
-
-    /** @type {number} */
-    get serializedSize() {
-        return /*protocol*/ 1
-            + /*services*/ 4
-            + /*timestamp*/ 8
-            + this._netAddress.serializedSize
-            + this._publicKey.serializedSize
-            + /*distance*/ 1
-            + this._signature.serializedSize;
-    }
-
-    /** @type {number} */
-    get serializedContentSize() {
-        return /*protocol*/ 1
-            + /*services*/ 4
-            + /*timestamp*/ 8;
-    }
-
-    /**
-     * @param {PeerAddress|*} o
-     * @returns {boolean}
-     */
-    equals(o) {
-        // We consider peer addresses to be equal if the public key or peer id is not known on one of them:
-        // Peers from the network always contain a peer id and public key, peers without peer id or public key
-        // are always set by the user.
-        return o instanceof PeerAddress
-            && this.protocol === o.protocol
-            && (!this.publicKey || !o.publicKey || this.publicKey.equals(o.publicKey))
-            && (!this.peerId || !o.peerId || this.peerId.equals(o.peerId));
-            /* services is ignored */
-            /* timestamp is ignored */
-            /* netAddress is ignored */
-            /* distance is ignored */
-    }
-
-    /**
-     * @returns {boolean}
-     */
-    verifySignature() {
-        if (this._signatureVerified === undefined) {
-            this._signatureVerified = this.signature.verify(this.publicKey, this.serializeContent());
-        }
-        return this._signatureVerified;
-    }
-
-    /** @type {number} */
-    get protocol() {
-        return this._protocol;
-    }
-
-    /** @type {number} */
-    get services() {
-        return this._services;
-    }
-
-    /** @type {number} */
-    get timestamp() {
-        return this._timestamp;
-    }
-
-    /** @type {NetAddress} */
-    get netAddress() {
-        return this._netAddress.isPseudo() ? null : this._netAddress;
-    }
-
-    /** @type {NetAddress} */
-    set netAddress(value) {
-        this._netAddress = value || NetAddress.UNSPECIFIED;
-    }
-
-    /** @type {PublicKey} */
-    get publicKey() {
-        return this._publicKey;
-    }
-
-    /** @type {PeerId} */
-    get peerId() {
-        return this._publicKey ? this._publicKey.toPeerId() : null;
-    }
-
-    /** @type {number} */
-    get distance() {
-        return this._distance;
-    }
-
-    /** @type {Signature} */
-    get signature() {
-        return this._signature;
-    }
-
-    /** @type {Signature} */
-    set signature(signature) {
-        // Never change the signature of a remote address.
-        if (this._distance !== 0) {
-            return;
-        }
-
-        this._signature = signature;
-        this._signatureVerified = undefined;
-    }
-
-    // Changed when passed on to other peers.
-    /** @type {number} */
-    set distance(value) {
-        this._distance = value;
-    }
-
-    /**
-     * @returns {boolean}
-     */
-    isSeed() {
-        return this._timestamp === 0;
-    }
-}
-
-Class.register(PeerAddress);
-
-class WsPeerAddress extends PeerAddress {
-    /**
-     * @param {string} host
-     * @param {number} port
-     * @param {string} [publicKeyHex]
-     * @returns {WsPeerAddress}
-     */
-    static seed(host, port, publicKeyHex) {
-        const publicKey = publicKeyHex ? new PublicKey(BufferUtils.fromHex(publicKeyHex)) : null;
-        return new WsPeerAddress(Services.FULL, /*timestamp*/ 0, NetAddress.UNSPECIFIED, publicKey, 0, host, port);
-    }
-
-    /**
-     * @param {number} services
-     * @param {number} timestamp
-     * @param {NetAddress} netAddress
-     * @param {PublicKey} publicKey
-     * @param {number} distance
-     * @param {string} host
-     * @param {number} port
-     * @param {Signature} [signature]
-     */
-    constructor(services, timestamp, netAddress, publicKey, distance, host, port, signature) {
-        super(Protocol.WS, services, timestamp, netAddress, publicKey, distance, signature);
-        if (!host) throw new Error('Malformed host');
-        if (!NumberUtils.isUint16(port)) throw new Error('Malformed port');
-        this._host = host;
-        this._port = port;
-    }
-
-    /**
-     * @param {SerialBuffer} buf
-     * @returns {WsPeerAddress}
-     */
-    static unserialize(buf) {
-        const services = buf.readUint32();
-        const timestamp = buf.readUint64();
-        const netAddress = NetAddress.unserialize(buf);
-        const publicKey = PublicKey.unserialize(buf);
-        const distance = buf.readUint8();
-        const signature = Signature.unserialize(buf);
-        const host = buf.readVarLengthString();
-        const port = buf.readUint16();
-        return new WsPeerAddress(services, timestamp, netAddress, publicKey, distance, host, port, signature);
-    }
-
-    /**
-     * @param {SerialBuffer} [buf]
-     * @returns {SerialBuffer}
-     */
-    serialize(buf) {
-        buf = buf || new SerialBuffer(this.serializedSize);
-        super.serialize(buf);
-        buf.writeVarLengthString(this._host);
-        buf.writeUint16(this._port);
-        return buf;
-    }
-
-    /**
-     * @param {SerialBuffer} [buf]
-     * @returns {SerialBuffer}
-     */
-    serializeContent(buf) {
-        buf = buf || new SerialBuffer(this.serializedContentSize);
-        super.serializeContent(buf);
-        buf.writeVarLengthString(this._host);
-        buf.writeUint16(this._port);
-        return buf;
-    }
-
-    /**
-     * @returns {boolean}
-     */
-    globallyReachable() {
-        return NetUtils.hostGloballyReachable(this.host);
-    }
-
-    /** @type {number} */
-    get serializedSize() {
-        return super.serializedSize
-            + SerialBuffer.varLengthStringSize(this._host)
-            + /*port*/ 2;
-    }
-
-    /** @type {number} */
-    get serializedContentSize() {
-        return super.serializedContentSize
-            + SerialBuffer.varLengthStringSize(this._host)
-            + /*port*/ 2;
-    }
-
-    /**
-     * @override
-     * @param {PeerAddress|*} o
-     * @returns {boolean}
-     */
-    equals(o) {
-        return super.equals(o)
-            && o instanceof WsPeerAddress
-            && ((!!this.peerId && !!o.peerId) || (this._host === o.host && this._port === o.port));
-    }
-
-    /**
-     * @returns {string}
-     */
-    hashCode() {
-        return this.peerId
-            ? `wss:///${this.peerId}`
-            : `wss://${this._host}:${this._port}/`;
-    }
-
-    /**
-     * @returns {string}
-     */
-    toString() {
-        return `wss://${this._host}:${this._port}/${this.peerId ? this.peerId : ''}`;
-    }
-
-    /**
-     * @returns {WsPeerAddress}
-     */
-    withoutId() {
-        return new WsPeerAddress(this.services, this.timestamp, this.netAddress, null, this.distance, this.host, this.port);
-    }
-
-    /** @type {string} */
-    get host() {
-        return this._host;
-    }
-
-    /** @type {number} */
-    get port() {
-        return this._port;
-    }
-}
-
-Class.register(WsPeerAddress);
-
-class RtcPeerAddress extends PeerAddress {
-    /**
-     * @param {number} services
-     * @param {number} timestamp
-     * @param {NetAddress} netAddress
-     * @param {PublicKey} publicKey
-     * @param {number} distance
-     * @param {Signature} [signature]
-     */
-    constructor(services, timestamp, netAddress, publicKey, distance, signature) {
-        super(Protocol.RTC, services, timestamp, netAddress, publicKey, distance, signature);
-    }
-
-    /**
-     * @param {SerialBuffer} buf
-     * @returns {RtcPeerAddress}
-     */
-    static unserialize(buf) {
-        const services = buf.readUint32();
-        const timestamp = buf.readUint64();
-        const netAddress = NetAddress.unserialize(buf);
-        const publicKey = PublicKey.unserialize(buf);
-        const distance = buf.readUint8();
-        const signature = Signature.unserialize(buf);
-        return new RtcPeerAddress(services, timestamp, netAddress, publicKey, distance, signature);
-    }
-
-    /**
-     * @param {SerialBuffer} [buf]
-     * @returns {SerialBuffer}
-     */
-    serialize(buf) {
-        buf = buf || new SerialBuffer(this.serializedSize);
-        super.serialize(buf);
-        return buf;
-    }
-
-    /** @type {number} */
-    get serializedSize() {
-        return super.serializedSize;
-    }
-
-    /**
-     * @override
-     * @param {PeerAddress|*} o
-     * @returns {boolean}
-     */
-    equals(o) {
-        return super.equals(o)
-            && o instanceof RtcPeerAddress;
-    }
-
-    /**
-     * @returns {string}
-     */
-    hashCode() {
-        return this.toString();
-    }
-
-    /**
-     * @returns {string}
-     */
-    toString() {
-        return `rtc:///${this.peerId}`;
-    }
-}
-
-Class.register(RtcPeerAddress);
-
-class DumbPeerAddress extends PeerAddress {
-    /**
-     * @param {number} services
-     * @param {number} timestamp
-     * @param {NetAddress} netAddress
-     * @param {PublicKey} publicKey
-     * @param {number} distance
-     * @param {Signature} [signature]
-     */
-    constructor(services, timestamp, netAddress, publicKey, distance, signature) {
-        super(Protocol.DUMB, services, timestamp, netAddress, publicKey, distance, signature);
-    }
-
-    /**
-     * @param {SerialBuffer} buf
-     * @returns {DumbPeerAddress}
-     */
-    static unserialize(buf) {
-        const services = buf.readUint32();
-        const timestamp = buf.readUint64();
-        const netAddress = NetAddress.unserialize(buf);
-        const publicKey = PublicKey.unserialize(buf);
-        const distance = buf.readUint8();
-        const signature = Signature.unserialize(buf);
-        return new DumbPeerAddress(services, timestamp, netAddress, publicKey, distance, signature);
-    }
-
-    /**
-     * @param {SerialBuffer} [buf]
-     * @returns {SerialBuffer}
-     */
-    serialize(buf) {
-        buf = buf || new SerialBuffer(this.serializedSize);
-        super.serialize(buf);
-        return buf;
-    }
-
-    /** @type {number} */
-    get serializedSize() {
-        return super.serializedSize;
-    }
-
-    /**
-     * @override
-     * @param {PeerAddress} o
-     * @returns {boolean}
-     */
-    equals(o) {
-        return super.equals(o)
-            && o instanceof DumbPeerAddress;
-    }
-
-    /**
-     * @returns {string}
-     */
-    hashCode() {
-        return this.toString();
-    }
-
-    /**
-     * @returns {string}
-     */
-    toString() {
-        return `dumb:///${this.peerId}`;
-    }
-}
-
-Class.register(DumbPeerAddress);
-
-// TODO Limit the number of addresses we store.
-class PeerAddresses extends Observable {
-    /**
-     * @constructor
-     * @param {NetworkConfig} netconfig
-     */
-    constructor(netconfig) {
-        super();
-
-        /**
-         * Set of PeerAddressStates of all peerAddresses we know.
-         * @type {HashSet.<PeerAddressState>}
-         * @private
-         */
-        this._store = new HashSet();
-
-        /**
-         * Map from peerIds to RTC peerAddresses.
-         * @type {HashMap.<PeerId,PeerAddressState>}
-         * @private
-         */
-        this._peerIds = new HashMap();
-
-        /**
-         * @type {NetworkConfig}
-         * @private
-         */
-        this._networkConfig = netconfig;
-
-        // Number of WebSocket/WebRTC peers.
-        /** @type {number} */
-        this._peerCountWs = 0;
-        /** @type {number} */
-        this._peerCountRtc = 0;
-        /** @type {number} */
-        this._peerCountDumb = 0;
-
-        /**
-         * Number of ongoing outbound connection attempts.
-         * @type {number}
-         * @private
-         */
-        this._connectingCount = 0;
-
-        // Init seed peers.
-        this.add(/*channel*/ null, PeerAddresses.SEED_PEERS);
-
-        // Setup housekeeping interval.
-        setInterval(() => this._housekeeping(), PeerAddresses.HOUSEKEEPING_INTERVAL);
-    }
-
-    /**
-     * @returns {?PeerAddress}
-     */
-    pickAddress() {
-        const addresses = this._store.values();
-        const numAddresses = addresses.length;
-
-        // Pick a random start index.
-        const index = Math.floor(Math.random() * numAddresses);
-
-        // Score up to 1000 addresses starting from the start index and pick the
-        // one with the highest score. Never pick addresses with score < 0.
-        const minCandidates = Math.min(numAddresses, 1000);
-        const candidates = new HashMap();
-        for (let i = 0; i < numAddresses; i++) {
-            const idx = (index + i) % numAddresses;
-            const address = addresses[idx];
-            const score = this._scoreAddress(address);
-            if (score >= 0) {
-                candidates.put(score, address);
-                if (candidates.length >= minCandidates) {
-                    break;
-                }
-            }
-        }
-
-        if (candidates.length === 0) {
-            return null;
-        }
-
-        // Return the candidate with the highest score.
-        const scores = candidates.keys().sort((a, b) => b - a);
-        const winner = candidates.get(scores[0]);
-        return winner.peerAddress;
-    }
-
-    /**
-     * @param {PeerAddressState} peerAddressState
-     * @returns {number}
-     * @private
-     */
-    _scoreAddress(peerAddressState) {
-        const peerAddress = peerAddressState.peerAddress;
-
-        // Filter addresses that we cannot connect to.
-        if (!this._networkConfig.canConnect(peerAddress.protocol)) {
-            return -1;
-        }
-
-        // Filter addresses that are too old.
-        if (this._exceedsAge(peerAddress)) {
-            return -1;
-        }
-
-        const score = this._scoreProtocol(peerAddress)
-            * ((peerAddress.timestamp / 1000) + 1);
-
-        switch (peerAddressState.state) {
-            case PeerAddressState.CONNECTING:
-            case PeerAddressState.CONNECTED:
-            case PeerAddressState.BANNED:
-                return -1;
-
-            case PeerAddressState.NEW:
-            case PeerAddressState.TRIED:
-                return score;
-
-            case PeerAddressState.FAILED:
-                // Don't pick failed addresses when they have failed the maximum number of times.
-                return (1 - ((peerAddressState.failedAttempts + 1) / peerAddressState.maxFailedAttempts)) * score;
-
-            default:
-                return -1;
-        }
-    }
-
-    /**
-     * @param {PeerAddress} peerAddress
-     * @returns {number}
-     * @private
-     */
-    _scoreProtocol(peerAddress) {
-        let score = 1;
-
-        // We want at least two websocket connection
-        if (this._peerCountWs < 2) {
-            score *= peerAddress.protocol === Protocol.WS ? 3 : 1;
-        } else {
-            score *= peerAddress.protocol === Protocol.RTC ? 3 : 1;
-        }
-
-        // Prefer WebRTC addresses with lower distance:
-        //  distance = 0: self
-        //  distance = 1: direct connection
-        //  distance = 2: 1 hop
-        //  ...
-        // We only expect distance >= 2 here.
-        if (peerAddress.protocol === Protocol.RTC) {
-            score *= 1 + ((PeerAddresses.MAX_DISTANCE - peerAddress.distance) / 2);
-        }
-
-        return score;
-    }
-
-    /** @type {number} */
-    get peerCount() {
-        return this._peerCountWs + this._peerCountRtc + this._peerCountDumb;
-    }
-
-    /**
-     * @param {PeerAddress} peerAddress
-     * @returns {?PeerAddressState}
-     * @private
-     */
-    _get(peerAddress) {
-        if (peerAddress instanceof WsPeerAddress) {
-            const localPeerAddress = this._store.get(peerAddress.withoutId());
-            if (localPeerAddress) return localPeerAddress;
-        }
-        return this._store.get(peerAddress);
-    }
-
-    /**
-     * @param {PeerAddress} peerAddress
-     * @returns {PeerAddress|null}
-     */
-    get(peerAddress) {
-        /** @type {PeerAddressState} */
-        const peerAddressState = this._get(peerAddress);
-        return peerAddressState ? peerAddressState.peerAddress : null;
-    }
-
-    /**
-     * @param {PeerId} peerId
-     * @returns {PeerAddress|null}
-     */
-    getByPeerId(peerId) {
-        /** @type {PeerAddressState} */
-        const peerAddressState = this._peerIds.get(peerId);
-        return peerAddressState ? peerAddressState.peerAddress : null;
-    }
-
-    /**
-     * @param {PeerId} peerId
-     * @returns {PeerChannel}
-     */
-    getChannelByPeerId(peerId) {
-        const peerAddressState = this._peerIds.get(peerId);
-        if (peerAddressState && peerAddressState.bestRoute) {
-            return peerAddressState.bestRoute.signalChannel;
-        }
-        return null;
-    }
-
-    /**
-     * @todo improve this by returning the best addresses first.
-     * @param {number} protocolMask
-     * @param {number} serviceMask
-     * @param {number} maxAddresses
-     * @returns {Array.<PeerAddress>}
-     */
-    query(protocolMask, serviceMask, maxAddresses = 1000) {
-        // XXX inefficient linear scan
-        const now = Date.now();
-        const addresses = [];
-        for (const peerAddressState of this._store.values()) {
-            // Never return banned or failed addresses.
-            if (peerAddressState.state === PeerAddressState.BANNED
-                    || peerAddressState.state === PeerAddressState.FAILED) {
-                continue;
-            }
-
-            // Never return seed peers.
-            const address = peerAddressState.peerAddress;
-            if (address.isSeed()) {
-                continue;
-            }
-
-            // Only return addresses matching the protocol mask.
-            if ((address.protocol & protocolMask) === 0) {
-                continue;
-            }
-
-            // Only return addresses matching the service mask.
-            if ((address.services & serviceMask) === 0) {
-                continue;
-            }
-
-            // Update timestamp for connected peers.
-            if (peerAddressState.state === PeerAddressState.CONNECTED) {
-                // Also update timestamp for RTC connections
-                if (peerAddressState.bestRoute) {
-                    peerAddressState.bestRoute.timestamp = now;
-                }
-            }
-
-            // Never return addresses that are too old.
-            if (this._exceedsAge(address)) {
-                continue;
-            }
-
-            // Return this address.
-            addresses.push(address);
-
-            // Stop if we have collected maxAddresses.
-            if (addresses.length >= maxAddresses) {
-                break;
-            }
-        }
-        return addresses;
-    }
-
-    /**
-     * @param {PeerChannel} channel
-     * @param {PeerAddress|Array.<PeerAddress>} arg
-     */
-    add(channel, arg) {
-        const peerAddresses = Array.isArray(arg) ? arg : [arg];
-        const newAddresses = [];
-
-        for (const addr of peerAddresses) {
-            if (this._add(channel, addr)) {
-                newAddresses.push(addr);
-            }
-        }
-
-        // Tell listeners that we learned new addresses.
-        if (newAddresses.length) {
-            this.fire('added', newAddresses, this);
-        }
-    }
-
-    /**
-     * @param {PeerChannel} channel
-     * @param {PeerAddress|RtcPeerAddress} peerAddress
-     * @returns {boolean}
-     * @private
-     */
-    _add(channel, peerAddress) {
-        // Ignore our own address.
-        if (this._networkConfig.peerAddress.equals(peerAddress)) {
-            return false;
-        }
-
-        // Ignore address if it is too old.
-        // Special case: allow seed addresses (timestamp == 0) via null channel.
-        if (channel && this._exceedsAge(peerAddress)) {
-            Log.d(PeerAddresses, `Ignoring address ${peerAddress} - too old (${new Date(peerAddress.timestamp)})`);
-            return false;
-        }
-
-        // Ignore address if its timestamp is too far in the future.
-        if (peerAddress.timestamp > Date.now() + PeerAddresses.MAX_TIMESTAMP_DRIFT) {
-            Log.d(PeerAddresses, `Ignoring addresses ${peerAddress} - timestamp in the future`);
-            return false;
-        }
-
-        // Increment distance values of RTC addresses.
-        if (peerAddress.protocol === Protocol.RTC) {
-            peerAddress.distance++;
-
-            // Ignore address if it exceeds max distance.
-            if (peerAddress.distance > PeerAddresses.MAX_DISTANCE) {
-                Log.d(PeerAddresses, `Ignoring address ${peerAddress} - max distance exceeded`);
-                // Drop any route to this peer over the current channel. This may prevent loops.
-                const peerAddressState = this._get(peerAddress);
-                if (peerAddressState) {
-                    peerAddressState.deleteRoute(channel);
-                }
-                return false;
-            }
-        }
-
-        // Check if we already know this address.
-        let peerAddressState = this._get(peerAddress);
-        if (peerAddressState) {
-            const knownAddress = peerAddressState.peerAddress;
-
-            // Ignore address if it is banned.
-            if (peerAddressState.state === PeerAddressState.BANNED) {
-                return false;
-            }
-
-            // Never update seed peers.
-            if (knownAddress.isSeed()) {
-                return false;
-            }
-
-            // Never erase NetAddresses.
-            if (knownAddress.netAddress && !peerAddress.netAddress) {
-                peerAddress.netAddress = knownAddress.netAddress;
-            }
-
-            // Ignore address if it is a websocket address and we already know this address with a more recent timestamp.
-            if (peerAddress.protocol === Protocol.WS && knownAddress.timestamp >= peerAddress.timestamp) {
-                return false;
-            }
-        } else {
-            // Add new peerAddressState.
-            peerAddressState = new PeerAddressState(peerAddress);
-            this._store.add(peerAddressState);
-            if (peerAddress.protocol === Protocol.RTC) {
-                // Index by peerId.
-                this._peerIds.put(peerAddress.peerId, peerAddressState);
-            }
-        }
-
-        // Add route.
-        if (peerAddress.protocol === Protocol.RTC) {
-            peerAddressState.addRoute(channel, peerAddress.distance, peerAddress.timestamp);
-        }
-
-        // Update the address.
-        peerAddressState.peerAddress = peerAddress;
-
-        return true;
-    }
-
-    /**
-     * Called when a connection to this peerAddress is being established.
-     * @param {PeerAddress} peerAddress
-     * @returns {void}
-     */
-    connecting(peerAddress) {
-        const peerAddressState = this._get(peerAddress);
-        if (!peerAddressState) {
-            return;
-        }
-        if (peerAddressState.state === PeerAddressState.BANNED) {
-            throw 'Connecting to banned address';
-        }
-        if (peerAddressState.state === PeerAddressState.CONNECTED) {
-            throw `Duplicate connection to ${peerAddress}`;
-        }
-
-        if (peerAddressState.state !== PeerAddressState.CONNECTING) {
-            this._connectingCount++;
-        }
-        peerAddressState.state = PeerAddressState.CONNECTING;
-    }
-
-    /**
-     * Called when a connection to this peerAddress has been established.
-     * The connection might have been initiated by the other peer, so address
-     * may not be known previously.
-     * If it is already known, it has been updated by a previous version message.
-     * @param {PeerChannel} channel
-     * @param {PeerAddress|RtcPeerAddress} peerAddress
-     * @returns {void}
-     */
-    connected(channel, peerAddress) {
-        let peerAddressState = this._get(peerAddress);
-        
-        if (!peerAddressState) {
-            peerAddressState = new PeerAddressState(peerAddress);
-
-            if (peerAddress.protocol === Protocol.RTC) {
-                this._peerIds.put(peerAddress.peerId, peerAddressState);
-            }
-
-            this._store.add(peerAddressState);
-        }
-
-        if (peerAddressState.state === PeerAddressState.BANNED
-            // Allow recovering seed peer's inbound connection to succeed.
-            && !peerAddressState.peerAddress.isSeed()) {
-
-            throw 'Connected to banned address';
-        }
-
-        if (peerAddressState.state === PeerAddressState.CONNECTING) {
-            this._connectingCount--;
-        }
-        if (peerAddressState.state !== PeerAddressState.CONNECTED) {
-            this._updateConnectedPeerCount(peerAddress, 1);
-        }
-
-        peerAddressState.state = PeerAddressState.CONNECTED;
-        peerAddressState.lastConnected = Date.now();
-        peerAddressState.failedAttempts = 0;
-        peerAddressState.bannedUntil = -1;
-        peerAddressState.banBackoff = PeerAddresses.INITIAL_FAILED_BACKOFF;
-
-        if (!peerAddressState.peerAddress.isSeed()) {
-            peerAddressState.peerAddress = peerAddress;
-        }
-
-        // Add route.
-        if (peerAddress.protocol === Protocol.RTC) {
-            peerAddressState.addRoute(channel, peerAddress.distance, peerAddress.timestamp);
-        }
-    }
-
-    /**
-     * Called when a connection to this peerAddress is closed.
-     * @param {PeerChannel} channel
-     * @param {PeerAddress} peerAddress
-     * @param {boolean} closedByRemote
-     * @returns {void}
-     */
-    disconnected(channel, peerAddress, closedByRemote) {
-        const peerAddressState = this._get(peerAddress);
-        if (!peerAddressState) {
-            return;
-        }
-
-        // Delete all addresses that were signalable over the disconnected peer.
-        if (channel) {
-            this._removeBySignalChannel(channel);
-        }
-
-        if (peerAddressState.state === PeerAddressState.BANNED) {
-            return;
-        }
-        if (peerAddressState.state === PeerAddressState.CONNECTING) {
-            this._connectingCount--;
-        }
-        if (peerAddressState.state === PeerAddressState.CONNECTED) {
-            this._updateConnectedPeerCount(peerAddress, -1);
-        }
-
-        // Always set state to tried, even when deciding to delete this address.
-        // In the latter case, this will not influence the deletion,
-        // but it will prevent decrementing the peer count twice when banning seed nodes.
-        peerAddressState.state = PeerAddressState.TRIED;
-
-        // XXX Immediately delete address if the remote host closed the connection.
-        // Also immediately delete dumb clients, since we cannot connect to those anyway.
-        if ((closedByRemote && PlatformUtils.isOnline()) || peerAddress.protocol === Protocol.DUMB) {
-            this._remove(peerAddress);
-        }
-    }
-
-    /**
-     * Called when a network connection to this peerAddress has failed.
-     * @param {PeerAddress} peerAddress
-     * @returns {void}
-     */
-    failure(peerAddress) {
-        const peerAddressState = this._get(peerAddress);
-        if (!peerAddressState) {
-            return;
-        }
-        if (peerAddressState.state === PeerAddressState.BANNED) {
-            return;
-        }
-        if (peerAddressState.state === PeerAddressState.CONNECTING) {
-            this._connectingCount--;
-        }
-
-        peerAddressState.state = PeerAddressState.FAILED;
-        peerAddressState.failedAttempts++;
-
-        if (peerAddressState.failedAttempts >= peerAddressState.maxFailedAttempts) {
-            // Remove address only if we have tried the maximum number of backoffs.
-            if (peerAddressState.banBackoff >= PeerAddresses.MAX_FAILED_BACKOFF) {
-                this._remove(peerAddress);
-            } else {
-                peerAddressState.bannedUntil = Date.now() + peerAddressState.banBackoff;
-                peerAddressState.banBackoff = Math.min(PeerAddresses.MAX_FAILED_BACKOFF, peerAddressState.banBackoff * 2);
-            }
-        }
-    }
-
-    /**
-     * Called when a message has been returned as unroutable.
-     * @param {PeerChannel} channel
-     * @param {PeerAddress} peerAddress
-     * @returns {void}
-     */
-    unroutable(channel, peerAddress) {
-        if (!peerAddress) {
-            return;
-        }
-
-        const peerAddressState = this._get(peerAddress);
-        if (!peerAddressState) {
-            return;
-        }
-
-        if (!peerAddressState.bestRoute || !peerAddressState.bestRoute.signalChannel.equals(channel)) {
-            Log.w(PeerAddresses, `Got unroutable for ${peerAddress} on a channel other than the best route.`);
-            return;
-        }
-
-        peerAddressState.deleteBestRoute();
-        if (!peerAddressState.hasRoute()) {
-            this._remove(peerAddressState.peerAddress);
-        }
-    }
-
-    /**
-     * @param {PeerAddress} peerAddress
-     * @param {number} [duration] in milliseconds
-     * @returns {void}
-     */
-    ban(peerAddress, duration = PeerAddresses.DEFAULT_BAN_TIME) {
-        let peerAddressState = this._get(peerAddress);
-        if (!peerAddressState) {
-            peerAddressState = new PeerAddressState(peerAddress);
-            this._store.add(peerAddressState);
-        }
-        if (peerAddressState.state === PeerAddressState.CONNECTING) {
-            this._connectingCount--;
-        }
-        if (peerAddressState.state === PeerAddressState.CONNECTED) {
-            this._updateConnectedPeerCount(peerAddress, -1);
-        }
-
-        peerAddressState.state = PeerAddressState.BANNED;
-        peerAddressState.bannedUntil = Date.now() + duration;
-
-        // Drop all routes to this peer.
-        peerAddressState.deleteAllRoutes();
-    }
-
-    /**
-     * @param {PeerAddress} peerAddress
-     * @returns {boolean}
-     */
-    isConnected(peerAddress) {
-        const peerAddressState = this._get(peerAddress);
-        return peerAddressState && peerAddressState.state === PeerAddressState.CONNECTED;
-    }
-
-    /**
-     * @param {PeerAddress} peerAddress
-     * @returns {boolean}
-     */
-    isBanned(peerAddress) {
-        const peerAddressState = this._get(peerAddress);
-        return peerAddressState
-            && peerAddressState.state === PeerAddressState.BANNED
-            // XXX Never consider seed peers to be banned. This allows us to use
-            // the banning mechanism to prevent seed peers from being picked when
-            // they are down, but still allows recovering seed peers' inbound
-            // connections to succeed.
-            && !peerAddressState.peerAddress.isSeed();
-    }
-
-    /**
-     * @param {PeerAddress} peerAddress
-     * @returns {void}
-     * @private
-     */
-    _remove(peerAddress) {
-        const peerAddressState = this._get(peerAddress);
-        if (!peerAddressState) {
-            return;
-        }
-
-        // Never delete seed addresses, ban them instead for a couple of minutes.
-        if (peerAddressState.peerAddress.isSeed()) {
-            this.ban(peerAddress, peerAddressState.banBackoff);
-            return;
-        }
-
-        // Delete from peerId index.
-        if (peerAddress.protocol === Protocol.RTC) {
-            this._peerIds.remove(peerAddress.peerId);
-        }
-
-        if (peerAddressState.state === PeerAddressState.CONNECTING) {
-            this._connectingCount--;
-        }
-
-        // Don't delete bans.
-        if (peerAddressState.state === PeerAddressState.BANNED) {
-            return;
-        }
-
-        // Delete the address.
-        this._store.remove(peerAddress);
-    }
-
-    /**
-     * Delete all RTC-only routes that are signalable over the given peer.
-     * @param {PeerChannel} channel
-     * @returns {void}
-     * @private
-     */
-    _removeBySignalChannel(channel) {
-        // XXX inefficient linear scan
-        for (const peerAddressState of this._store.values()) {
-            if (peerAddressState.peerAddress.protocol === Protocol.RTC) {
-                peerAddressState.deleteRoute(channel);
-                if (!peerAddressState.hasRoute()) {
-                    this._remove(peerAddressState.peerAddress);
-                }
-            }
-        }
-    }
-
-    /**
-     * @param {PeerAddress} peerAddress
-     * @param {number} delta
-     * @returns {void}
-     * @private
-     */
-    _updateConnectedPeerCount(peerAddress, delta) {
-        switch (peerAddress.protocol) {
-            case Protocol.WS:
-                this._peerCountWs += delta;
-                break;
-            case Protocol.RTC:
-                this._peerCountRtc += delta;
-                break;
-            case Protocol.DUMB:
-                this._peerCountDumb += delta;
-                break;
-            default:
-                Log.w(PeerAddresses, `Unknown protocol ${peerAddress.protocol}`);
-        }
-    }
-
-    /**
-     * @returns {void}
-     * @private
-     */
-    _housekeeping() {
-        const now = Date.now();
-        const unbannedAddresses = [];
-
-        for (/** @type {PeerAddressState} */ const peerAddressState of this._store.values()) {
-            const addr = peerAddressState.peerAddress;
-
-            switch (peerAddressState.state) {
-                case PeerAddressState.NEW:
-                case PeerAddressState.TRIED:
-                case PeerAddressState.FAILED:
-                    // Delete all new peer addresses that are older than MAX_AGE.
-                    if (this._exceedsAge(addr)) {
-                        Log.d(PeerAddresses, `Deleting old peer address ${addr}`);
-                        this._remove(addr);
-                    }
-
-                    // Reset failed attempts after bannedUntil has expired.
-                    if (peerAddressState.state === PeerAddressState.FAILED
-                        && peerAddressState.failedAttempts >= peerAddressState.maxFailedAttempts
-                        && peerAddressState.bannedUntil > 0 && peerAddressState.bannedUntil <= now) {
-
-                        peerAddressState.bannedUntil = -1;
-                        peerAddressState.failedAttempts = 0;
-                    }
-
-                    break;
-
-                case PeerAddressState.BANNED:
-                    if (peerAddressState.bannedUntil <= now) {
-                        // Don't remove seed addresses, unban them.
-                        if (addr.isSeed()) {
-                            // Restore banned seed addresses to the NEW state.
-                            peerAddressState.state = PeerAddressState.NEW;
-                            peerAddressState.failedAttempts = 0;
-                            peerAddressState.bannedUntil = -1;
-                            unbannedAddresses.push(addr);
-                        } else {
-                            // Delete expires bans.
-                            this._store.remove(addr);
-                        }
-                    }
-                    break;
-
-                case PeerAddressState.CONNECTED:
-                    // Also update timestamp for RTC connections
-                    if (peerAddressState.bestRoute) {
-                        peerAddressState.bestRoute.timestamp = now;
-                    }
-                    break;
-
-                default:
-                    // TODO What about peers who are stuck connecting? Can this happen?
-                    // Do nothing for CONNECTING peers.
-            }
-        }
-
-        if (unbannedAddresses.length) {
-            this.fire('added', unbannedAddresses, this);
-        }
-    }
-
-    /**
-     * @param {PeerAddress} peerAddress
-     * @returns {boolean}
-     * @private
-     */
-    _exceedsAge(peerAddress) {
-        // Seed addresses are never too old.
-        if (peerAddress.isSeed()) {
-            return false;
-        }
-
-        const age = Date.now() - peerAddress.timestamp;
-        switch (peerAddress.protocol) {
-            case Protocol.WS:
-                return age > PeerAddresses.MAX_AGE_WEBSOCKET;
-
-            case Protocol.RTC:
-                return age > PeerAddresses.MAX_AGE_WEBRTC;
-
-            case Protocol.DUMB:
-                return age > PeerAddresses.MAX_AGE_DUMB;
-        }
-        return false;
-    }
-
-    /** @type {number} */
-    get peerCountWs() {
-        return this._peerCountWs;
-    }
-
-    /** @type {number} */
-    get peerCountRtc() {
-        return this._peerCountRtc;
-    }
-
-    /** @type {number} */
-    get peerCountDumb() {
-        return this._peerCountDumb;
-    }
-
-    /** @type {number} */
-    get connectingCount() {
-        return this._connectingCount;
-    }
-
-    /** @type {number} */
-    get knownAddressesCount() {
-        return this._store.length;
-    }
-}
-PeerAddresses.MAX_AGE_WEBSOCKET = 1000 * 60 * 30; // 30 minutes
-PeerAddresses.MAX_AGE_WEBRTC = 1000 * 60 * 10; // 10 minutes
-PeerAddresses.MAX_AGE_DUMB = 1000 * 60; // 1 minute
-PeerAddresses.MAX_DISTANCE = 4;
-PeerAddresses.MAX_FAILED_ATTEMPTS_WS = 3;
-PeerAddresses.MAX_FAILED_ATTEMPTS_RTC = 2;
-PeerAddresses.MAX_TIMESTAMP_DRIFT = 1000 * 60 * 10; // 10 minutes
-PeerAddresses.HOUSEKEEPING_INTERVAL = 1000 * 60; // 1 minute
-PeerAddresses.DEFAULT_BAN_TIME = 1000 * 60 * 10; // 10 minutes
-PeerAddresses.INITIAL_FAILED_BACKOFF = 1000 * 15; // 15 seconds
-PeerAddresses.MAX_FAILED_BACKOFF = 1000 * 60 * 10; // 10 minutes
-PeerAddresses.SEED_PEERS = [
-    // WsPeerAddress.seed('alpacash.com', 8080),
-    // WsPeerAddress.seed('nimiq1.styp-rekowsky.de', 8080),
-    // WsPeerAddress.seed('nimiq2.styp-rekowsky.de', 8080),
-    // WsPeerAddress.seed('seed1.nimiq-network.com', 8080),
-    // WsPeerAddress.seed('seed2.nimiq-network.com', 8080),
-    // WsPeerAddress.seed('seed3.nimiq-network.com', 8080),
-    // WsPeerAddress.seed('seed4.nimiq-network.com', 8080),
-    // WsPeerAddress.seed('emily.nimiq-network.com', 443)
-    WsPeerAddress.seed('dev.nimiq-network.com', 8080, 'e65e39616662f2c16d62dc08915e5a1d104619db8c2b9cf9b389f96c8dce9837')
-];
-Class.register(PeerAddresses);
-
-class PeerAddressState {
-    /**
-     * @param {PeerAddress} peerAddress
-     */
-    constructor(peerAddress) {
-        /** @type {PeerAddress} */
-        this.peerAddress = peerAddress;
-
-        /** @type {number} */
-        this.state = PeerAddressState.NEW;
-        /** @type {number} */
-        this.lastConnected = -1;
-        /** @type {number} */
-        this.bannedUntil = -1;
-        /** @type {number} */
-        this.banBackoff = PeerAddresses.INITIAL_FAILED_BACKOFF;
-
-        /** @type {SignalRoute} */
-        this._bestRoute = null;
-        /** @type {HashSet.<SignalRoute>} */
-        this._routes = new HashSet();
-
-        /** @type {number} */
-        this._failedAttempts = 0;
-    }
-
-    /** @type {number} */
-    get maxFailedAttempts() {
-        switch (this.peerAddress.protocol) {
-            case Protocol.RTC:
-                return PeerAddresses.MAX_FAILED_ATTEMPTS_RTC;
-            case Protocol.WS:
-                return PeerAddresses.MAX_FAILED_ATTEMPTS_WS;
-            default:
-                return 0;
-        }
-    }
-
-    /** @type {number} */
-    get failedAttempts() {
-        if (this._bestRoute) {
-            return this._bestRoute.failedAttempts;
-        } else {
-            return this._failedAttempts;
-        }
-    }
-
-    /** @type {number} */
-    set failedAttempts(value) {
-        if (this._bestRoute) {
-            this._bestRoute.failedAttempts = value;
-            this._updateBestRoute(); // scores may have changed
-        } else {
-            this._failedAttempts = value;
-        }
-    }
-
-    /** @type {SignalRoute} */
-    get bestRoute() {
-        return this._bestRoute;
-    }
-
-    /**
-     * @param {PeerChannel} signalChannel
-     * @param {number} distance
-     * @param {number} timestamp
-     * @returns {void}
-     */
-    addRoute(signalChannel, distance, timestamp) {
-        const oldRoute = this._routes.get(signalChannel);
-        const newRoute = new SignalRoute(signalChannel, distance, timestamp);
-
-        if (oldRoute) {
-            // Do not reset failed attempts.
-            newRoute.failedAttempts = oldRoute.failedAttempts;
-        }
-        this._routes.add(newRoute);
-
-        if (!this._bestRoute || newRoute.score > this._bestRoute.score
-            || (newRoute.score === this._bestRoute.score && timestamp > this._bestRoute.timestamp)) {
-
-            this._bestRoute = newRoute;
-            this.peerAddress.distance = this._bestRoute.distance;
-        }
-    }
-
-    /**
-     * @returns {void}
-     */
-    deleteBestRoute() {
-        if (this._bestRoute) {
-            this.deleteRoute(this._bestRoute.signalChannel);
-        }
-    }
-
-    /**
-     * @param {PeerChannel} signalChannel
-     * @returns {void}
-     */
-    deleteRoute(signalChannel) {
-        this._routes.remove(signalChannel); // maps to same hashCode
-        if (this._bestRoute && this._bestRoute.signalChannel.equals(signalChannel)) {
-            this._updateBestRoute();
-        }
-    }
-
-    /**
-     * @returns {void}
-     */
-    deleteAllRoutes() {
-        this._bestRoute = null;
-        this._routes = new HashSet();
-    }
-
-    /**
-     * @returns {boolean}
-     */
-    hasRoute() {
-        return this._routes.length > 0;
-    }
-
-    /**
-     * @returns {void}
-     * @private
-     */
-    _updateBestRoute() {
-        let bestRoute = null;
-        // Choose the route with minimal distance and maximal timestamp.
-        for (const route of this._routes.values()) {
-            if (bestRoute === null || route.score > bestRoute.score
-                || (route.score === bestRoute.score && route.timestamp > bestRoute.timestamp)) {
-
-                bestRoute = route;
-            }
-        }
-        this._bestRoute = bestRoute;
-        if (this._bestRoute) {
-            this.peerAddress.distance = this._bestRoute.distance;
-        } else {
-            this.peerAddress.distance = PeerAddresses.MAX_DISTANCE + 1;
-        }
-    }
-
-    /**
-     * @param {PeerAddressState|*} o
-     * @returns {boolean}
-     */
-    equals(o) {
-        return o instanceof PeerAddressState
-            && this.peerAddress.equals(o.peerAddress);
-    }
-
-    /**
-     * @returns {string}
-     */
-    hashCode() {
-        return this.peerAddress.hashCode();
-    }
-
-    /**
-     * @returns {string}
-     */
-    toString() {
-        return `PeerAddressState{peerAddress=${this.peerAddress}, state=${this.state}, `
-            + `lastConnected=${this.lastConnected}, failedAttempts=${this.failedAttempts}, `
-            + `bannedUntil=${this.bannedUntil}}`;
-    }
-}
-PeerAddressState.NEW = 1;
-PeerAddressState.CONNECTING = 2;
-PeerAddressState.CONNECTED = 3;
-PeerAddressState.TRIED = 4;
-PeerAddressState.FAILED = 5;
-PeerAddressState.BANNED = 6;
-Class.register(PeerAddressState);
-
-class SignalRoute {
-    /**
-     * @param {PeerChannel} signalChannel
-     * @param {number} distance
-     * @param {number} timestamp
-     */
-    constructor(signalChannel, distance, timestamp) {
-        this.failedAttempts = 0;
-        this.timestamp = timestamp;
-        this._signalChannel = signalChannel;
-        this._distance = distance;
-    }
-
-    /** @type {PeerChannel} */
-    get signalChannel() {
-        return this._signalChannel;
-    }
-
-    /** @type {number} */
-    get distance() {
-        return this._distance;
-    }
-
-    /** @type {number} */
-    get score() {
-        return ((PeerAddresses.MAX_DISTANCE - this._distance) / 2) * (1 - (this.failedAttempts / PeerAddresses.MAX_FAILED_ATTEMPTS_RTC));
-    }
-
-    /**
-     * @param {SignalRoute} o
-     * @returns {boolean}
-     */
-    equals(o) {
-        return o instanceof SignalRoute
-            && this._signalChannel.equals(o._signalChannel);
-    }
-
-    /**
-     * @returns {string}
-     */
-    hashCode() {
-        return this._signalChannel.hashCode();
-    }
-
-    /**
-     * @returns {string}
-     */
-    toString() {
-        return `SignalRoute{signalChannel=${this._signalChannel}, distance=${this._distance}, timestamp=${this.timestamp}, failedAttempts=${this.failedAttempts}}`;
-    }
-}
-Class.register(SignalRoute);
 
 class Message {
     /**
@@ -28211,16 +26548,18 @@ TransactionReceiptsMessage.RECEIPTS_MAX_COUNT = 500;
 
 class MessageFactory {
     /**
-     * @param buffer
-     * @return {Message.Type}
+     * @param {SerialBuffer} buf
+     * @returns {Message.Type}
      */
-    static peekType(buffer) {
-        const buf = new SerialBuffer(buffer);
+    static peekType(buf) {
         return Message.peekType(buf);
     }
 
-    static parse(buffer) {
-        const buf = new SerialBuffer(buffer);
+    /**
+     * @param {SerialBuffer} buf
+     * @returns {Message}
+     */
+    static parse(buf) {
         const type = Message.peekType(buf);
         const clazz = MessageFactory.CLASSES[type];
         if (!clazz || !clazz.unserialize) throw new Error(`Invalid message type: ${type}`);
@@ -28290,7 +26629,6 @@ class WebRtcConnector extends Observable {
 
         const peerId = peerAddress.peerId;
         if (this._connectors.contains(peerId)) {
-            Log.w(WebRtcConnector, `WebRtc: Already connecting/connected to ${peerId}`);
             return false;
         }
 
@@ -28348,6 +26686,7 @@ class WebRtcConnector extends Observable {
             // simultaneously. Resolve this by having the peer with the higher
             // peerId discard the offer while the one with the lower peerId
             // accepts it.
+            /** @type {PeerConnector} */
             let connector = this._connectors.get(msg.senderId);
             if (connector) {
                 if (msg.recipientId.compare(msg.senderId) > 0) {
@@ -28361,9 +26700,12 @@ class WebRtcConnector extends Observable {
                     return;
                 } else {
                     // We are going to accept the offer. Clear the connect timeout
-                    // from our previous Outbound connection attempt to this peer.
+                    // from our previous outbound connection attempt to this peer.
                     Log.d(WebRtcConnector, `Simultaneous connection, accepting offer from ${msg.senderId} (>${msg.recipientId})`);
                     this._timers.clearTimeout(`connect_${msg.senderId}`);
+
+                    // XXX Abort the outbound connection attempt.
+                    this.fire('error', connector.peerAddress, 'simultaneous inbound connection');
                 }
             }
 
@@ -28525,7 +26867,7 @@ class PeerConnector extends Observable {
             Log.w(PeerConnector, 'No ICE candidate seen for inbound connection');
         }
 
-        const conn = new PeerConnection(channel, Protocol.RTC, netAddress, this._peerAddress);
+        const conn = new NetworkConnection(channel, Protocol.RTC, netAddress, this._peerAddress);
         this.fire('connection', conn);
     }
 
@@ -28591,7 +26933,6 @@ class WebRtcDataChannel extends DataChannel {
         // FIXME It seems that Firefox still sometimes receives blobs instead of ArrayBuffers on RTC connections.
         // FIXME FileReader is async and may RE-ORDER MESSAGES!
         if (msg instanceof Blob) {
-            Log.e(DataChannel, 'Converting blob to ArrayBuffer on WebRtcDataChannel');
             const reader = new FileReader();
             reader.onloadend = () => super._onMessage(reader.result);
             reader.readAsArrayBuffer(msg);
@@ -28676,9 +27017,12 @@ class WebSocketConnector extends Observable {
         ws.onopen = () => {
             this._timers.clearTimeout(timeoutKey);
 
+            // Don't fire error events after the connection has been established.
+            ws.onerror = () => {};
+
             // There is no way to determine the remote IP in the browser ... thanks for nothing, WebSocket API.
             const netAddress = (ws._socket && ws._socket.remoteAddress) ? NetAddress.fromIP(ws._socket.remoteAddress) : null;
-            const conn = new PeerConnection(new WebSocketDataChannel(ws), Protocol.WS, netAddress, peerAddress);
+            const conn = new NetworkConnection(new WebSocketDataChannel(ws), Protocol.WS, netAddress, peerAddress);
             this.fire('connection', conn);
         };
         ws.onerror = e => {
@@ -28722,7 +27066,7 @@ class WebSocketConnector extends Observable {
      */
     _onConnection(ws) {
         const netAddress = NetAddress.fromIP(ws._socket.remoteAddress);
-        const conn = new PeerConnection(new WebSocketDataChannel(ws), Protocol.WS, netAddress, /*peerAddress*/ null);
+        const conn = new NetworkConnection(new WebSocketDataChannel(ws), Protocol.WS, netAddress, /*peerAddress*/ null);
 
         /**
         * Tell listeners that an initial connection to a peer has been established.
@@ -28773,10 +27117,2329 @@ class WebSocketDataChannel extends DataChannel {
 
 Class.register(WebSocketDataChannel);
 
+class NetAddress {
+    /**
+     * @param {string} ip
+     * @return {NetAddress}
+     */
+    static fromIP(ip) {
+        const saneIp = NetUtils.sanitizeIP(ip);
+        return new NetAddress(saneIp);
+    }
+
+    /**
+     * @param {string} ip
+     */
+    constructor(ip) {
+        /** @type {string} */
+        this._ip = ip;
+    }
+
+    /**
+     * @param {SerialBuffer} buf
+     * @return {NetAddress}
+     */
+    static unserialize(buf) {
+        const ip = buf.readVarLengthString();
+
+        // Allow empty NetAddresses.
+        if (!ip) {
+            return NetAddress.UNSPECIFIED;
+        }
+
+        return NetAddress.fromIP(ip);
+    }
+
+    /**
+     * @param {?SerialBuffer} [buf]
+     * @return {SerialBuffer}
+     */
+    serialize(buf) {
+        buf = buf || new SerialBuffer(this.serializedSize);
+        buf.writeVarLengthString(this._ip);
+        return buf;
+    }
+
+    /** @type {number} */
+    get serializedSize() {
+        return SerialBuffer.varLengthStringSize(this._ip);
+    }
+
+    /**
+     * @param {NetAddress} o
+     * @return {boolean}
+     */
+    equals(o) {
+        return o instanceof NetAddress
+            && this._ip === o.ip;
+    }
+
+    hashCode() {
+        return this.toString();
+    }
+
+    /**
+     * @return {string}
+     */
+    toString() {
+        return `${this._ip}`;
+    }
+
+    /** @type {string} */
+    get ip() {
+        return this._ip;
+    }
+
+    /**
+     * @return {boolean}
+     */
+    isPseudo() {
+        return !this._ip || NetAddress.UNKNOWN.equals(this);
+    }
+
+    /**
+     * @return {boolean}
+     */
+    isPrivate() {
+        return this.isPseudo() || NetUtils.isPrivateIP(this._ip);
+    }
+}
+NetAddress.UNSPECIFIED = new NetAddress('');
+NetAddress.UNKNOWN = new NetAddress('<unknown>');
+Class.register(NetAddress);
+
+class PeerId extends Primitive {
+    /**
+     * @param {PeerId} o
+     * @returns {PeerId}
+     */
+    static copy(o) {
+        if (!o) return o;
+        const obj = new Uint8Array(o._obj);
+        return new PeerId(obj);
+    }
+
+    constructor(arg) {
+        super(arg, Uint8Array, PeerId.SERIALIZED_SIZE);
+    }
+
+    /**
+     * Create Address object from binary form.
+     * @param {SerialBuffer} buf Buffer to read from.
+     * @return {PeerId} Newly created Account object.
+     */
+    static unserialize(buf) {
+        return new PeerId(buf.read(PeerId.SERIALIZED_SIZE));
+    }
+
+    /**
+     * Serialize this Address object into binary form.
+     * @param {?SerialBuffer} [buf] Buffer to write to.
+     * @return {SerialBuffer} Buffer from `buf` or newly generated one.
+     */
+    serialize(buf) {
+        buf = buf || new SerialBuffer(this.serializedSize);
+        buf.write(this._obj);
+        return buf;
+    }
+
+    subarray(begin, end) {
+        return this._obj.subarray(begin, end);
+    }
+
+    /**
+     * @type {number}
+     */
+    get serializedSize() {
+        return PeerId.SERIALIZED_SIZE;
+    }
+
+    /**
+     * @param {Primitive} o
+     * @return {boolean}
+     */
+    equals(o) {
+        return o instanceof PeerId
+            && super.equals(o);
+    }
+
+    /**
+     * @returns {string}
+     * @override
+     */
+    toString() {
+        return this.toHex();
+    }
+
+    /**
+     * @param {string} base64
+     * @return {PeerId}
+     */
+    static fromBase64(base64) {
+        return new PeerId(BufferUtils.fromBase64(base64));
+    }
+
+    /**
+     * @param {string} hex
+     * @return {PeerId}
+     */
+    static fromHex(hex) {
+        return new PeerId(BufferUtils.fromHex(hex));
+    }
+}
+
+PeerId.SERIALIZED_SIZE = 16;
+Class.register(PeerId);
+
+class PeerAddress {
+    /**
+     * @param {number} protocol
+     * @param {number} services
+     * @param {number} timestamp
+     * @param {NetAddress} netAddress
+     * @param {PublicKey} publicKey
+     * @param {number} distance
+     * @param {Signature} [signature]
+     */
+    constructor(protocol, services, timestamp, netAddress, publicKey, distance, signature) {
+        if (!NumberUtils.isUint8(distance)) throw new Error('Malformed distance');
+        if (publicKey !== null && !(publicKey instanceof PublicKey)) throw new Error('Malformed publicKey');
+
+        /** @type {number} */
+        this._protocol = protocol;
+        /** @type {number} */
+        this._services = services;
+        /** @type {number} */
+        this._timestamp = timestamp;
+        /** @type {NetAddress} */
+        this._netAddress = netAddress || NetAddress.UNSPECIFIED;
+        /** @type {PublicKey} */
+        this._publicKey = publicKey;
+        /** @type {number} */
+        this._distance = distance;
+        /** @type {?Signature} */
+        this._signature = signature;
+    }
+
+    /**
+     * @param {SerialBuffer} buf
+     * @returns {PeerAddress}
+     */
+    static unserialize(buf) {
+        const protocol = buf.readUint8();
+        switch (protocol) {
+            case Protocol.WS:
+                return WsPeerAddress.unserialize(buf);
+
+            case Protocol.RTC:
+                return RtcPeerAddress.unserialize(buf);
+
+            case Protocol.DUMB:
+                return DumbPeerAddress.unserialize(buf);
+
+            default:
+                throw `Malformed PeerAddress protocol ${protocol}`;
+        }
+    }
+
+    /**
+     * @param {SerialBuffer} [buf]
+     * @returns {SerialBuffer}
+     */
+    serialize(buf) {
+        if (!this._publicKey) throw new Error('PeerAddress without publicKey may not be serialized.');
+        if (!this._signature) throw new Error('PeerAddress without signature may not be serialized.');
+
+        buf = buf || new SerialBuffer(this.serializedSize);
+        buf.writeUint8(this._protocol);
+        buf.writeUint32(this._services);
+        buf.writeUint64(this._timestamp);
+
+        // Never serialize private netAddresses.
+        if (this._netAddress.isPrivate()) {
+            NetAddress.UNSPECIFIED.serialize(buf);
+        } else {
+            this._netAddress.serialize(buf);
+        }
+
+        this._publicKey.serialize(buf);
+        buf.writeUint8(this._distance);
+        this._signature.serialize(buf);
+
+        return buf;
+    }
+
+    serializeContent(buf) {
+        buf = buf || new SerialBuffer(this.serializedContentSize);
+
+        buf.writeUint8(this._protocol);
+        buf.writeUint32(this._services);
+        buf.writeUint64(this._timestamp);
+
+        return buf;
+    }
+
+    /** @type {number} */
+    get serializedSize() {
+        return /*protocol*/ 1
+            + /*services*/ 4
+            + /*timestamp*/ 8
+            + this._netAddress.serializedSize
+            + this._publicKey.serializedSize
+            + /*distance*/ 1
+            + this._signature.serializedSize;
+    }
+
+    /** @type {number} */
+    get serializedContentSize() {
+        return /*protocol*/ 1
+            + /*services*/ 4
+            + /*timestamp*/ 8;
+    }
+
+    /**
+     * @param {PeerAddress|*} o
+     * @returns {boolean}
+     */
+    equals(o) {
+        // We consider peer addresses to be equal if the public key or peer id is not known on one of them:
+        // Peers from the network always contain a peer id and public key, peers without peer id or public key
+        // are always set by the user.
+        return o instanceof PeerAddress
+            && this.protocol === o.protocol
+            && (!this.publicKey || !o.publicKey || this.publicKey.equals(o.publicKey))
+            && (!this.peerId || !o.peerId || this.peerId.equals(o.peerId));
+            /* services is ignored */
+            /* timestamp is ignored */
+            /* netAddress is ignored */
+            /* distance is ignored */
+    }
+
+    /**
+     * @returns {boolean}
+     */
+    verifySignature() {
+        if (this._signatureVerified === undefined) {
+            this._signatureVerified = this.signature.verify(this.publicKey, this.serializeContent());
+        }
+        return this._signatureVerified;
+    }
+
+    /** @type {number} */
+    get protocol() {
+        return this._protocol;
+    }
+
+    /** @type {number} */
+    get services() {
+        return this._services;
+    }
+
+    /** @type {number} */
+    get timestamp() {
+        return this._timestamp;
+    }
+
+    /** @type {NetAddress} */
+    get netAddress() {
+        return this._netAddress.isPseudo() ? null : this._netAddress;
+    }
+
+    /** @type {NetAddress} */
+    set netAddress(value) {
+        this._netAddress = value || NetAddress.UNSPECIFIED;
+    }
+
+    /** @type {PublicKey} */
+    get publicKey() {
+        return this._publicKey;
+    }
+
+    /** @type {PeerId} */
+    get peerId() {
+        return this._publicKey ? this._publicKey.toPeerId() : null;
+    }
+
+    /** @type {number} */
+    get distance() {
+        return this._distance;
+    }
+
+    /** @type {Signature} */
+    get signature() {
+        return this._signature;
+    }
+
+    /** @type {Signature} */
+    set signature(signature) {
+        // Never change the signature of a remote address.
+        if (this._distance !== 0) {
+            return;
+        }
+
+        this._signature = signature;
+        this._signatureVerified = undefined;
+    }
+
+    // Changed when passed on to other peers.
+    /** @type {number} */
+    set distance(value) {
+        this._distance = value;
+    }
+
+    /**
+     * @returns {boolean}
+     */
+    isSeed() {
+        return this._timestamp === 0;
+    }
+
+    /**
+     * @returns {boolean}
+     */
+    exceedsAge() {
+        // Seed addresses are never too old.
+        if (this.isSeed()) {
+            return false;
+        }
+
+        const age = Date.now() - this.timestamp;
+        switch (this.protocol) {
+            case Protocol.WS:
+                return age > PeerAddressBook.MAX_AGE_WEBSOCKET;
+
+            case Protocol.RTC:
+                return age > PeerAddressBook.MAX_AGE_WEBRTC;
+
+            case Protocol.DUMB:
+                return age > PeerAddressBook.MAX_AGE_DUMB;
+        }
+        return false;
+    }
+
+}
+
+Class.register(PeerAddress);
+
+class WsPeerAddress extends PeerAddress {
+    /**
+     * @param {string} host
+     * @param {number} port
+     * @param {string} [publicKeyHex]
+     * @returns {WsPeerAddress}
+     */
+    static seed(host, port, publicKeyHex) {
+        const publicKey = publicKeyHex ? new PublicKey(BufferUtils.fromHex(publicKeyHex)) : null;
+        return new WsPeerAddress(Services.FULL, /*timestamp*/ 0, NetAddress.UNSPECIFIED, publicKey, 0, host, port);
+    }
+
+    /**
+     * @param {number} services
+     * @param {number} timestamp
+     * @param {NetAddress} netAddress
+     * @param {PublicKey} publicKey
+     * @param {number} distance
+     * @param {string} host
+     * @param {number} port
+     * @param {Signature} [signature]
+     */
+    constructor(services, timestamp, netAddress, publicKey, distance, host, port, signature) {
+        super(Protocol.WS, services, timestamp, netAddress, publicKey, distance, signature);
+        if (!host) throw new Error('Malformed host');
+        if (!NumberUtils.isUint16(port)) throw new Error('Malformed port');
+        this._host = host;
+        this._port = port;
+    }
+
+    /**
+     * @param {SerialBuffer} buf
+     * @returns {WsPeerAddress}
+     */
+    static unserialize(buf) {
+        const services = buf.readUint32();
+        const timestamp = buf.readUint64();
+        const netAddress = NetAddress.unserialize(buf);
+        const publicKey = PublicKey.unserialize(buf);
+        const distance = buf.readUint8();
+        const signature = Signature.unserialize(buf);
+        const host = buf.readVarLengthString();
+        const port = buf.readUint16();
+        return new WsPeerAddress(services, timestamp, netAddress, publicKey, distance, host, port, signature);
+    }
+
+    /**
+     * @param {SerialBuffer} [buf]
+     * @returns {SerialBuffer}
+     */
+    serialize(buf) {
+        buf = buf || new SerialBuffer(this.serializedSize);
+        super.serialize(buf);
+        buf.writeVarLengthString(this._host);
+        buf.writeUint16(this._port);
+        return buf;
+    }
+
+    /**
+     * @param {SerialBuffer} [buf]
+     * @returns {SerialBuffer}
+     */
+    serializeContent(buf) {
+        buf = buf || new SerialBuffer(this.serializedContentSize);
+        super.serializeContent(buf);
+        buf.writeVarLengthString(this._host);
+        buf.writeUint16(this._port);
+        return buf;
+    }
+
+    /**
+     * @returns {boolean}
+     */
+    globallyReachable() {
+        return NetUtils.hostGloballyReachable(this.host);
+    }
+
+    /** @type {number} */
+    get serializedSize() {
+        return super.serializedSize
+            + SerialBuffer.varLengthStringSize(this._host)
+            + /*port*/ 2;
+    }
+
+    /** @type {number} */
+    get serializedContentSize() {
+        return super.serializedContentSize
+            + SerialBuffer.varLengthStringSize(this._host)
+            + /*port*/ 2;
+    }
+
+    /**
+     * @override
+     * @param {PeerAddress|*} o
+     * @returns {boolean}
+     */
+    equals(o) {
+        return super.equals(o)
+            && o instanceof WsPeerAddress
+            && ((!!this.peerId && !!o.peerId) || (this._host === o.host && this._port === o.port));
+    }
+
+    /**
+     * @returns {string}
+     */
+    hashCode() {
+        return this.peerId
+            ? `wss:///${this.peerId}`
+            : `wss://${this._host}:${this._port}/`;
+    }
+
+    /**
+     * @returns {string}
+     */
+    toString() {
+        return `wss://${this._host}:${this._port}/${this.peerId ? this.peerId : ''}`;
+    }
+
+    /**
+     * @returns {WsPeerAddress}
+     */
+    withoutId() {
+        return new WsPeerAddress(this.services, this.timestamp, this.netAddress, null, this.distance, this.host, this.port);
+    }
+
+    /** @type {string} */
+    get host() {
+        return this._host;
+    }
+
+    /** @type {number} */
+    get port() {
+        return this._port;
+    }
+}
+
+Class.register(WsPeerAddress);
+
+class RtcPeerAddress extends PeerAddress {
+    /**
+     * @param {number} services
+     * @param {number} timestamp
+     * @param {NetAddress} netAddress
+     * @param {PublicKey} publicKey
+     * @param {number} distance
+     * @param {Signature} [signature]
+     */
+    constructor(services, timestamp, netAddress, publicKey, distance, signature) {
+        super(Protocol.RTC, services, timestamp, netAddress, publicKey, distance, signature);
+    }
+
+    /**
+     * @param {SerialBuffer} buf
+     * @returns {RtcPeerAddress}
+     */
+    static unserialize(buf) {
+        const services = buf.readUint32();
+        const timestamp = buf.readUint64();
+        const netAddress = NetAddress.unserialize(buf);
+        const publicKey = PublicKey.unserialize(buf);
+        const distance = buf.readUint8();
+        const signature = Signature.unserialize(buf);
+        return new RtcPeerAddress(services, timestamp, netAddress, publicKey, distance, signature);
+    }
+
+    /**
+     * @param {SerialBuffer} [buf]
+     * @returns {SerialBuffer}
+     */
+    serialize(buf) {
+        buf = buf || new SerialBuffer(this.serializedSize);
+        super.serialize(buf);
+        return buf;
+    }
+
+    /** @type {number} */
+    get serializedSize() {
+        return super.serializedSize;
+    }
+
+    /**
+     * @override
+     * @param {PeerAddress|*} o
+     * @returns {boolean}
+     */
+    equals(o) {
+        return super.equals(o)
+            && o instanceof RtcPeerAddress;
+    }
+
+    /**
+     * @returns {string}
+     */
+    hashCode() {
+        return this.toString();
+    }
+
+    /**
+     * @returns {string}
+     */
+    toString() {
+        return `rtc:///${this.peerId}`;
+    }
+}
+
+Class.register(RtcPeerAddress);
+
+class DumbPeerAddress extends PeerAddress {
+    /**
+     * @param {number} services
+     * @param {number} timestamp
+     * @param {NetAddress} netAddress
+     * @param {PublicKey} publicKey
+     * @param {number} distance
+     * @param {Signature} [signature]
+     */
+    constructor(services, timestamp, netAddress, publicKey, distance, signature) {
+        super(Protocol.DUMB, services, timestamp, netAddress, publicKey, distance, signature);
+    }
+
+    /**
+     * @param {SerialBuffer} buf
+     * @returns {DumbPeerAddress}
+     */
+    static unserialize(buf) {
+        const services = buf.readUint32();
+        const timestamp = buf.readUint64();
+        const netAddress = NetAddress.unserialize(buf);
+        const publicKey = PublicKey.unserialize(buf);
+        const distance = buf.readUint8();
+        const signature = Signature.unserialize(buf);
+        return new DumbPeerAddress(services, timestamp, netAddress, publicKey, distance, signature);
+    }
+
+    /**
+     * @param {SerialBuffer} [buf]
+     * @returns {SerialBuffer}
+     */
+    serialize(buf) {
+        buf = buf || new SerialBuffer(this.serializedSize);
+        super.serialize(buf);
+        return buf;
+    }
+
+    /** @type {number} */
+    get serializedSize() {
+        return super.serializedSize;
+    }
+
+    /**
+     * @override
+     * @param {PeerAddress} o
+     * @returns {boolean}
+     */
+    equals(o) {
+        return super.equals(o)
+            && o instanceof DumbPeerAddress;
+    }
+
+    /**
+     * @returns {string}
+     */
+    hashCode() {
+        return this.toString();
+    }
+
+    /**
+     * @returns {string}
+     */
+    toString() {
+        return `dumb:///${this.peerId}`;
+    }
+}
+
+Class.register(DumbPeerAddress);
+
+class PeerAddressState {
+    /**
+     * @param {PeerAddress} peerAddress
+     */
+    constructor(peerAddress) {
+        /** @type {PeerAddress} */
+        this.peerAddress = peerAddress;
+
+        /** @type {number} */
+        this.state = PeerAddressState.NEW;
+        /** @type {number} */
+        this.lastConnected = -1;
+        /** @type {number} */
+        this.bannedUntil = -1;
+        /** @type {number} */
+        this.banBackoff = PeerAddressBook.INITIAL_FAILED_BACKOFF;
+
+        /** @type {SignalRouter} */
+        this._signalRouter = new SignalRouter(peerAddress);
+
+        /** @type {number} */
+        this._failedAttempts = 0;
+
+        /**
+         * Map from closeType to number of occurrences
+         * @type {Map.<number,number>}
+         * @private
+         */
+        this._closeTypes = new Map();
+    }
+
+    /** @type {SignalRouter} */
+    get signalRouter() {
+        return this._signalRouter;
+    }
+
+
+    /** @type {number} */
+    get maxFailedAttempts() {
+        switch (this.peerAddress.protocol) {
+            case Protocol.RTC:
+                return PeerAddressBook.MAX_FAILED_ATTEMPTS_RTC;
+            case Protocol.WS:
+                return PeerAddressBook.MAX_FAILED_ATTEMPTS_WS;
+            default:
+                return 0;
+        }
+    }
+
+    /** @type {number} */
+    get failedAttempts() {
+        if (this._signalRouter.bestRoute) {
+            return this._signalRouter.bestRoute.failedAttempts;
+        } else {
+            return this._failedAttempts;
+        }
+    }
+
+    /** @type {number} */
+    set failedAttempts(value) {
+        if (this._signalRouter.bestRoute) {
+            this._signalRouter.bestRoute.failedAttempts = value;
+            this._signalRouter.updateBestRoute(); // scores may have changed
+        } else {
+            this._failedAttempts = value;
+        }
+    }
+
+    /**
+     * @param {number} type
+     */
+    close(type) {
+        if (!type) return;
+
+        if (this._closeTypes.has(type)) {
+            this._closeTypes.set(type, this._closeTypes.get(type) + 1);
+        } else {
+            this._closeTypes.set(type, 1);
+        }
+
+        if (this.state === PeerAddressState.BANNED) {
+            return;
+        }
+
+        if (CloseType.isBanningType(type)) {
+            this.state = PeerAddressState.BANNED;
+        } else if (CloseType.isFailingType(type)) {
+            this.state = PeerAddressState.FAILED;
+        } else {
+            this.state = PeerAddressState.TRIED;
+        }
+    }
+
+    /**
+     * @param {PeerAddressState|*} o
+     * @returns {boolean}
+     */
+    equals(o) {
+        return o instanceof PeerAddressState
+            && this.peerAddress.equals(o.peerAddress);
+    }
+
+    /**
+     * @returns {string}
+     */
+    hashCode() {
+        return this.peerAddress.hashCode();
+    }
+
+    /**
+     * @returns {string}
+     */
+    toString() {
+        return `PeerAddressState{peerAddress=${this.peerAddress}, state=${this.state}, `
+            + `lastConnected=${this.lastConnected}, failedAttempts=${this.failedAttempts}, `
+            + `bannedUntil=${this.bannedUntil}}`;
+    }
+}
+PeerAddressState.NEW = 1;
+PeerAddressState.ESTABLISHED = 2;
+PeerAddressState.TRIED = 3;
+PeerAddressState.FAILED = 4;
+PeerAddressState.BANNED = 5;
+Class.register(PeerAddressState);
+
+class SignalRouter {
+    /**
+     * @constructor
+     * @param {PeerAddress} peerAddress
+     */
+    constructor(peerAddress) {
+        /** @type {PeerAddress} */
+        this.peerAddress = peerAddress;
+
+        /** @type {SignalRoute} */
+        this._bestRoute = null;
+        /** @type {HashSet.<SignalRoute>} */
+        this._routes = new HashSet();
+    }
+
+    /** @type {SignalRoute} */
+    get bestRoute() {
+        return this._bestRoute;
+    }
+
+    /**
+     * @param {PeerChannel} signalChannel
+     * @param {number} distance
+     * @param {number} timestamp
+     * @returns {void}
+     */
+    addRoute(signalChannel, distance, timestamp) {
+        const oldRoute = this._routes.get(signalChannel);
+        const newRoute = new SignalRoute(signalChannel, distance, timestamp);
+
+        if (oldRoute) {
+            // Do not reset failed attempts.
+            newRoute.failedAttempts = oldRoute.failedAttempts;
+        }
+        this._routes.add(newRoute);
+
+        if (!this._bestRoute || newRoute.score > this._bestRoute.score
+            || (newRoute.score === this._bestRoute.score && timestamp > this._bestRoute.timestamp)) {
+
+            this._bestRoute = newRoute;
+            this.peerAddress.distance = this._bestRoute.distance;
+        }
+    }
+
+    /**
+     * @returns {void}
+     */
+    deleteBestRoute() {
+        if (this._bestRoute) {
+            this.deleteRoute(this._bestRoute.signalChannel);
+        }
+    }
+
+    /**
+     * @param {PeerChannel} signalChannel
+     * @returns {void}
+     */
+    deleteRoute(signalChannel) {
+        this._routes.remove(signalChannel); // maps to same hashCode
+        if (this._bestRoute && this._bestRoute.signalChannel.equals(signalChannel)) {
+            this.updateBestRoute();
+        }
+    }
+
+    /**
+     * @returns {void}
+     */
+    deleteAllRoutes() {
+        this._bestRoute = null;
+        this._routes = new HashSet();
+    }
+
+    /**
+     * @returns {boolean}
+     */
+    hasRoute() {
+        return this._routes.length > 0;
+    }
+
+    /**
+     * @returns {void}
+     * @private
+     */
+    updateBestRoute() {
+        let bestRoute = null;
+        // Choose the route with minimal distance and maximal timestamp.
+        for (const route of this._routes.values()) {
+            if (bestRoute === null || route.score > bestRoute.score
+                || (route.score === bestRoute.score && route.timestamp > bestRoute.timestamp)) {
+
+                bestRoute = route;
+            }
+        }
+        this._bestRoute = bestRoute;
+        if (this._bestRoute) {
+            this.peerAddress.distance = this._bestRoute.distance;
+        } else {
+            this.peerAddress.distance = PeerAddressBook.MAX_DISTANCE + 1;
+        }
+    }
+
+    /**
+     * @param {PeerAddressState|*} o
+     * @returns {boolean}
+     */
+    equals(o) {
+        return o instanceof PeerAddressState
+            && this.peerAddress.equals(o.peerAddress);
+    }
+
+    /**
+     * @returns {string}
+     */
+    hashCode() {
+        return this.peerAddress.hashCode();
+    }
+
+    /**
+     * @returns {string}
+     */
+    toString() {
+        return `PeerAddressState{peerAddress=${this.peerAddress}, state=${this.state}, `
+            + `lastConnected=${this.lastConnected}, failedAttempts=${this.failedAttempts}, `
+            + `bannedUntil=${this.bannedUntil}}`;
+    }
+}
+Class.register(SignalRouter);
+
+class SignalRoute {
+    /**
+     * @param {PeerChannel} signalChannel
+     * @param {number} distance
+     * @param {number} timestamp
+     */
+    constructor(signalChannel, distance, timestamp) {
+        this.failedAttempts = 0;
+        this.timestamp = timestamp;
+        this._signalChannel = signalChannel;
+        this._distance = distance;
+    }
+
+    /** @type {PeerChannel} */
+    get signalChannel() {
+        return this._signalChannel;
+    }
+
+    /** @type {number} */
+    get distance() {
+        return this._distance;
+    }
+
+    /** @type {number} */
+    get score() {
+        return ((PeerAddressBook.MAX_DISTANCE - this._distance) / 2) * (1 - (this.failedAttempts / PeerAddressBook.MAX_FAILED_ATTEMPTS_RTC));
+    }
+
+    /**
+     * @param {SignalRoute} o
+     * @returns {boolean}
+     */
+    equals(o) {
+        return o instanceof SignalRoute
+            && this._signalChannel.equals(o._signalChannel);
+    }
+
+    /**
+     * @returns {string}
+     */
+    hashCode() {
+        return this._signalChannel.hashCode();
+    }
+
+    /**
+     * @returns {string}
+     */
+    toString() {
+        return `SignalRoute{signalChannel=${this._signalChannel}, distance=${this._distance}, timestamp=${this.timestamp}, failedAttempts=${this.failedAttempts}}`;
+    }
+}
+Class.register(SignalRoute);
+
+class PeerAddressBook extends Observable {
+    /**
+     * @constructor
+     * @param {NetworkConfig} netconfig
+     */
+    constructor(netconfig) {
+        super();
+
+        /**
+         * Set of PeerAddressStates of all peerAddresses we know.
+         * @type {HashSet.<PeerAddressState>}
+         * @private
+         */
+        this._store = new HashSet();
+
+        /**
+         * Map from peerIds to RTC peerAddresses.
+         * @type {HashMap.<PeerId,PeerAddressState>}
+         * @private
+         */
+        this._peerIds = new HashMap();
+
+        /**
+         * @type {NetworkConfig}
+         * @private
+         */
+        this._networkConfig = netconfig;
+
+
+        // Init seed peers.
+        this.add(/*channel*/ null, PeerAddressBook.SEED_PEERS);
+
+        // Setup housekeeping interval.
+        setInterval(() => this._housekeeping(), PeerAddressBook.HOUSEKEEPING_INTERVAL);
+    }
+
+    /**
+     * @returns {Array<PeerAddressState>}
+     */
+    values() {
+        return this._store.values();
+    }
+    /**
+     * @param {PeerAddress} peerAddress
+     * @returns {?PeerAddressState}
+     * @private
+     */
+    _get(peerAddress) {
+        if (peerAddress instanceof WsPeerAddress) {
+            const localPeerAddress = this._store.get(peerAddress.withoutId());
+            if (localPeerAddress) return localPeerAddress;
+        }
+        return this._store.get(peerAddress);
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @returns {?PeerAddressState}
+     */
+    getState(peerAddress) {
+        return this._get(peerAddress);
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @returns {PeerAddress|null}
+     */
+    get(peerAddress) {
+        /** @type {PeerAddressState} */
+        const peerAddressState = this._get(peerAddress);
+        return peerAddressState ? peerAddressState.peerAddress : null;
+    }
+
+    /**
+     * @param {PeerId} peerId
+     * @returns {PeerAddress|null}
+     */
+    getByPeerId(peerId) {
+        /** @type {PeerAddressState} */
+        const peerAddressState = this._peerIds.get(peerId);
+        return peerAddressState ? peerAddressState.peerAddress : null;
+    }
+
+    /**
+     * @param {PeerId} peerId
+     * @returns {PeerChannel}
+     */
+    getChannelByPeerId(peerId) {
+        const peerAddressState = this._peerIds.get(peerId);
+        if (peerAddressState && peerAddressState.signalRouter.bestRoute) {
+            return peerAddressState.signalRouter.bestRoute.signalChannel;
+        }
+        return null;
+    }
+
+    /**
+     * @todo improve this by returning the best addresses first.
+     * @param {number} protocolMask
+     * @param {number} serviceMask
+     * @param {number} maxAddresses
+     * @returns {Array.<PeerAddress>}
+     */
+    query(protocolMask, serviceMask, maxAddresses = 1000) {
+        // XXX inefficient linear scan
+        const now = Date.now();
+        const addresses = [];
+        for (const peerAddressState of this._store.values()) {
+            // Never return banned or failed addresses.
+            if (peerAddressState.state === PeerAddressState.BANNED
+                    || peerAddressState.state === PeerAddressState.FAILED) {
+                continue;
+            }
+
+            // Never return seed peers.
+            const address = peerAddressState.peerAddress;
+            if (address.isSeed()) {
+                continue;
+            }
+
+            // Only return addresses matching the protocol mask.
+            if ((address.protocol & protocolMask) === 0) {
+                continue;
+            }
+
+            // Only return addresses matching the service mask.
+            if ((address.services & serviceMask) === 0) {
+                continue;
+            }
+
+            // Update timestamp for connected peers.
+            if (peerAddressState.state === PeerAddressState.ESTABLISHED) {
+                // Also update timestamp for RTC connections
+                if (peerAddressState.signalRouter.bestRoute) {
+                    peerAddressState.signalRouter.bestRoute.timestamp = now;
+                }
+            }
+
+            // Never return addresses that are too old.
+            if (address.exceedsAge()) {
+                continue;
+            }
+
+            // Return this address.
+            addresses.push(address);
+
+            // Stop if we have collected maxAddresses.
+            if (addresses.length >= maxAddresses) {
+                break;
+            }
+        }
+        return addresses;
+    }
+
+    /**
+     * @param {PeerChannel} channel
+     * @param {PeerAddress|Array.<PeerAddress>} arg
+     * @fires PeerAddressBook#added
+     */
+    add(channel, arg) {
+        const peerAddresses = Array.isArray(arg) ? arg : [arg];
+        const newAddresses = [];
+
+        for (const addr of peerAddresses) {
+            if (this._add(channel, addr)) {
+                newAddresses.push(addr);
+            }
+        }
+
+        // Tell listeners that we learned new addresses.
+        if (newAddresses.length) {
+            this.fire('added', newAddresses, this);
+        }
+    }
+
+    /**
+     * @param {PeerChannel} channel
+     * @param {PeerAddress|RtcPeerAddress} peerAddress
+     * @returns {boolean}
+     * @private
+     */
+    _add(channel, peerAddress) {
+        // Max book size reached
+        if (this._store.length >= PeerAddressBook.MAX_SIZE) {
+            return false;
+        }
+
+        // Ignore our own address.
+        if (this._networkConfig.peerAddress.equals(peerAddress)) {
+            return false;
+        }
+
+        // Ignore address if it is too old.
+        // Special case: allow seed addresses (timestamp == 0) via null channel.
+        if (channel && peerAddress.exceedsAge()) {
+            Log.d(PeerAddressBook, `Ignoring address ${peerAddress} - too old (${new Date(peerAddress.timestamp)})`);
+            return false;
+        }
+
+        // Ignore address if its timestamp is too far in the future.
+        if (peerAddress.timestamp > Date.now() + PeerAddressBook.MAX_TIMESTAMP_DRIFT) {
+            Log.d(PeerAddressBook, `Ignoring addresses ${peerAddress} - timestamp in the future`);
+            return false;
+        }
+
+        // Increment distance values of RTC addresses.
+        if (peerAddress.protocol === Protocol.RTC) {
+            peerAddress.distance++;
+
+            // Ignore address if it exceeds max distance.
+            if (peerAddress.distance > PeerAddressBook.MAX_DISTANCE) {
+                Log.d(PeerAddressBook, `Ignoring address ${peerAddress} - max distance exceeded`);
+                // Drop any route to this peer over the current channel. This may prevent loops.
+                const peerAddressState = this._get(peerAddress);
+                if (peerAddressState) {
+                    peerAddressState.signalRouter.deleteRoute(channel);
+                }
+                return false;
+            }
+        }
+
+        // Check if we already know this address.
+        let peerAddressState = this._get(peerAddress);
+        if (peerAddressState) {
+            const knownAddress = peerAddressState.peerAddress;
+
+            // Ignore address if it is banned.
+            if (peerAddressState.state === PeerAddressState.BANNED) {
+                return false;
+            }
+
+            // Never update seed peers.
+            if (knownAddress.isSeed()) {
+                return false;
+            }
+
+            // Never erase NetAddresses.
+            if (knownAddress.netAddress && !peerAddress.netAddress) {
+                peerAddress.netAddress = knownAddress.netAddress;
+            }
+
+            // Ignore address if it is a websocket address and we already know this address with a more recent timestamp.
+            if (peerAddress.protocol === Protocol.WS && knownAddress.timestamp >= peerAddress.timestamp) {
+                return false;
+            }
+        } else {
+            // Add new peerAddressState.
+            peerAddressState = new PeerAddressState(peerAddress);
+            this._store.add(peerAddressState);
+            if (peerAddress.protocol === Protocol.RTC) {
+                // Index by peerId.
+                this._peerIds.put(peerAddress.peerId, peerAddressState);
+            }
+        }
+
+        // Add route.
+        if (peerAddress.protocol === Protocol.RTC) {
+            peerAddressState.signalRouter.addRoute(channel, peerAddress.distance, peerAddress.timestamp);
+        }
+
+        // Update the address.
+        peerAddressState.peerAddress = peerAddress;
+
+        return true;
+    }
+
+    /**
+     * Called when a connection to this peerAddress has been established.
+     * The connection might have been initiated by the other peer, so address
+     * may not be known previously.
+     * If it is already known, it has been updated by a previous version message.
+     * @param {PeerChannel} channel
+     * @param {PeerAddress|RtcPeerAddress} peerAddress
+     * @returns {void}
+     */
+    established(channel, peerAddress) {
+        let peerAddressState = this._get(peerAddress);
+        
+        if (!peerAddressState) {
+            peerAddressState = new PeerAddressState(peerAddress);
+
+            if (peerAddress.protocol === Protocol.RTC) {
+                this._peerIds.put(peerAddress.peerId, peerAddressState);
+            }
+
+            this._store.add(peerAddressState);
+        }
+
+        peerAddressState.state = PeerAddressState.ESTABLISHED;
+        peerAddressState.lastConnected = Date.now();
+        peerAddressState.failedAttempts = 0;
+        peerAddressState.bannedUntil = -1;
+        peerAddressState.banBackoff = PeerAddressBook.INITIAL_FAILED_BACKOFF;
+
+        if (!peerAddressState.peerAddress.isSeed()) {
+            peerAddressState.peerAddress = peerAddress;
+        }
+
+        // Add route.
+        if (peerAddress.protocol === Protocol.RTC) {
+            peerAddressState.signalRouter.addRoute(channel, peerAddress.distance, peerAddress.timestamp);
+        }
+    }
+
+    /**
+     * Called when a connection to this peerAddress is closed.
+     * @param {PeerChannel} channel
+     * @param {PeerAddress} peerAddress
+     * @param {number|null} type
+     * @returns {void}
+     */
+    close(channel, peerAddress, type = null) {
+        const peerAddressState = this._get(peerAddress);
+        if (!peerAddressState) {
+            return;
+        }
+
+        // register the type of disconnection
+        peerAddressState.close(type);
+
+        // Delete all addresses that were signalable over the disconnected peer.
+        if (channel) {
+            this._removeBySignalChannel(channel);
+        }
+
+        if (CloseType.isBanningType(type)){
+            this._ban(peerAddress);
+        }
+        else if (CloseType.isFailingType(type)) {
+            peerAddressState.failedAttempts++;
+
+            if (peerAddressState.failedAttempts >= peerAddressState.maxFailedAttempts) {
+                // Remove address only if we have tried the maximum number of backoffs.
+                if (peerAddressState.banBackoff >= PeerAddressBook.MAX_FAILED_BACKOFF) {
+                    this._remove(peerAddress);
+                } else {
+                    peerAddressState.bannedUntil = Date.now() + peerAddressState.banBackoff;
+                    peerAddressState.banBackoff = Math.min(PeerAddressBook.MAX_FAILED_BACKOFF, peerAddressState.banBackoff * 2);
+                }
+            }
+        }
+
+        // Immediately delete dumb addresses, since we cannot connect to those anyway.
+        if (peerAddress.protocol === Protocol.DUMB) {
+            this._remove(peerAddress);
+        }
+    }
+
+    /**
+     * Called when a message has been returned as unroutable.
+     * @param {PeerChannel} channel
+     * @param {PeerAddress} peerAddress
+     * @returns {void}
+     */
+    unroutable(channel, peerAddress) {
+        if (!peerAddress) {
+            return;
+        }
+
+        const peerAddressState = this._get(peerAddress);
+        if (!peerAddressState) {
+            return;
+        }
+
+        if (!peerAddressState.signalRouter.bestRoute || !peerAddressState.signalRouter.bestRoute.signalChannel.equals(channel)) {
+            Log.w(PeerAddressBook, `Got unroutable for ${peerAddress} on a channel other than the best route.`);
+            return;
+        }
+
+        peerAddressState.signalRouter.deleteBestRoute();
+        if (!peerAddressState.signalRouter.hasRoute()) {
+            this._remove(peerAddressState.peerAddress);
+        }
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @param {number} [duration] in milliseconds
+     * @returns {void}
+     * @private
+     */
+    _ban(peerAddress, duration = PeerAddressBook.DEFAULT_BAN_TIME) {
+        let peerAddressState = this._get(peerAddress);
+        if (!peerAddressState) {
+            peerAddressState = new PeerAddressState(peerAddress);
+            this._store.add(peerAddressState);
+        }
+
+        peerAddressState.state = PeerAddressState.BANNED;
+        peerAddressState.bannedUntil = Date.now() + duration;
+
+        // Drop all routes to this peer.
+        peerAddressState.signalRouter.deleteAllRoutes();
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @returns {boolean}
+     */
+    isBanned(peerAddress) {
+        const peerAddressState = this._get(peerAddress);
+        return peerAddressState
+            && peerAddressState.state === PeerAddressState.BANNED
+            // XXX Never consider seed peers to be banned. This allows us to use
+            // the banning mechanism to prevent seed peers from being picked when
+            // they are down, but still allows recovering seed peers' inbound
+            // connections to succeed.
+            && !peerAddressState.peerAddress.isSeed();
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @returns {void}
+     * @private
+     */
+    _remove(peerAddress) {
+        const peerAddressState = this._get(peerAddress);
+        if (!peerAddressState) {
+            return;
+        }
+
+        // Never delete seed addresses, ban them instead for a couple of minutes.
+        if (peerAddressState.peerAddress.isSeed()) {
+            this._ban(peerAddress, peerAddressState.banBackoff);
+            return;
+        }
+
+        // Delete from peerId index.
+        if (peerAddress.protocol === Protocol.RTC) {
+            this._peerIds.remove(peerAddress.peerId);
+        }
+
+        // Don't delete bans.
+        if (peerAddressState.state === PeerAddressState.BANNED) {
+            return;
+        }
+
+        // Delete the address.
+        this._store.remove(peerAddress);
+    }
+
+    /**
+     * Delete all RTC-only routes that are signalable over the given peer.
+     * @param {PeerChannel} channel
+     * @returns {void}
+     * @private
+     */
+    _removeBySignalChannel(channel) {
+        // XXX inefficient linear scan
+        for (const peerAddressState of this._store.values()) {
+            if (peerAddressState.peerAddress.protocol === Protocol.RTC) {
+                peerAddressState.signalRouter.deleteRoute(channel);
+                if (!peerAddressState.signalRouter.hasRoute()) {
+                    this._remove(peerAddressState.peerAddress);
+                }
+            }
+        }
+    }
+
+    /**
+     * @returns {void}
+     * @private
+     */
+    _housekeeping() {
+        const now = Date.now();
+        const unbannedAddresses = [];
+
+        for (/** @type {PeerAddressState} */ const peerAddressState of this._store.values()) {
+            const addr = peerAddressState.peerAddress;
+
+            switch (peerAddressState.state) {
+                case PeerAddressState.NEW:
+                case PeerAddressState.TRIED:
+                case PeerAddressState.FAILED:
+                    // Delete all new peer addresses that are older than MAX_AGE.
+                    if (addr.exceedsAge()) {
+                        Log.d(PeerAddressBook, `Deleting old peer address ${addr}`);
+                        this._remove(addr);
+                    }
+
+                    // Reset failed attempts after bannedUntil has expired.
+                    if (peerAddressState.state === PeerAddressState.FAILED
+                        && peerAddressState.failedAttempts >= peerAddressState.maxFailedAttempts
+                        && peerAddressState.bannedUntil > 0 && peerAddressState.bannedUntil <= now) {
+
+                        peerAddressState.bannedUntil = -1;
+                        peerAddressState.failedAttempts = 0;
+                        unbannedAddresses.push(addr);
+                    }
+
+                    break;
+
+                case PeerAddressState.BANNED:
+                    if (peerAddressState.bannedUntil <= now) {
+                        // Don't remove seed addresses, unban them.
+                        if (addr.isSeed()) {
+                            // Restore banned seed addresses to the NEW state.
+                            peerAddressState.state = PeerAddressState.NEW;
+                            peerAddressState.failedAttempts = 0;
+                            peerAddressState.bannedUntil = -1;
+                            unbannedAddresses.push(addr);
+                        } else {
+                            // Delete expires bans.
+                            this._store.remove(addr);
+                        }
+                    }
+                    break;
+
+                case PeerAddressState.ESTABLISHED:
+                    // Also update timestamp for RTC connections
+                    if (peerAddressState.signalRouter.bestRoute) {
+                        peerAddressState.signalRouter.bestRoute.timestamp = now;
+                    }
+                    break;
+
+                default:
+                    // TODO What about peers who are stuck connecting? Can this happen?
+                    // Do nothing for CONNECTING peers.
+            }
+        }
+
+        if (unbannedAddresses.length) {
+            this.fire('added', unbannedAddresses, this);
+        }
+    }
+
+    /** @type {number} */
+    get knownAddressesCount() {
+        return this._store.length;
+    }
+}
+PeerAddressBook.MAX_AGE_WEBSOCKET = 1000 * 60 * 30; // 30 minutes
+PeerAddressBook.MAX_AGE_WEBRTC = 1000 * 60 * 10; // 10 minutes
+PeerAddressBook.MAX_AGE_DUMB = 1000 * 60; // 1 minute
+PeerAddressBook.MAX_DISTANCE = 4;
+PeerAddressBook.MAX_FAILED_ATTEMPTS_WS = 3;
+PeerAddressBook.MAX_FAILED_ATTEMPTS_RTC = 2;
+PeerAddressBook.MAX_TIMESTAMP_DRIFT = 1000 * 60 * 10; // 10 minutes
+PeerAddressBook.HOUSEKEEPING_INTERVAL = 1000 * 60; // 1 minute
+PeerAddressBook.DEFAULT_BAN_TIME = 1000 * 60 * 10; // 10 minutes
+PeerAddressBook.INITIAL_FAILED_BACKOFF = 1000 * 30; // 30 seconds
+PeerAddressBook.MAX_FAILED_BACKOFF = 1000 * 60 * 10; // 10 minutes
+PeerAddressBook.MAX_SIZE = PlatformUtils.isBrowser() ? 10000 : 200000;
+PeerAddressBook.SEED_PEERS = [
+    // WsPeerAddress.seed('alpacash.com', 8080),
+    // WsPeerAddress.seed('nimiq1.styp-rekowsky.de', 8080),
+    // WsPeerAddress.seed('nimiq2.styp-rekowsky.de', 8080),
+    // WsPeerAddress.seed('seed1.nimiq-network.com', 8080),
+    // WsPeerAddress.seed('seed2.nimiq-network.com', 8080),
+    // WsPeerAddress.seed('seed3.nimiq-network.com', 8080),
+    // WsPeerAddress.seed('seed4.nimiq-network.com', 8080),
+    // WsPeerAddress.seed('emily.nimiq-network.com', 443)
+    WsPeerAddress.seed('dev.nimiq-network.com', 8080, 'e65e39616662f2c16d62dc08915e5a1d104619db8c2b9cf9b389f96c8dce9837')
+];
+Class.register(PeerAddressBook);
+
+class CloseType {
+    /**
+     * @param {number} closingType
+     * @return {boolean}
+     */
+    static isBanningType(closingType){
+        return closingType >= 100 && closingType < 200;
+    }
+
+    /**
+     * @param {number} closingType
+     * @return {boolean}
+     */
+    static isFailingType(closingType){
+        return closingType >= 200;
+    }
+}
+
+// Regular Close Types
+
+CloseType.GET_BLOCKS_TIMEOUT = 1;
+CloseType.GET_CHAIN_PROOF_TIMEOUT = 2;
+CloseType.GET_ACCOUNTS_TREE_CHUNK_TIMEOUT = 3;
+CloseType.GET_HEADER_TIMEOUT = 4;
+CloseType.INVALID_ACCOUNTS_TREE_CHUNK = 5;
+CloseType.ACCOUNTS_TREE_CHUNCK_ROOT_HASH_MISMATCH = 6;
+CloseType.INVALID_CHAIN_PROOF = 7;
+CloseType.RECEIVED_WRONG_HEADER = 8;
+CloseType.DID_NOT_GET_REQUESTED_HEADER = 9;
+CloseType.ABORTED_SYNC = 10;
+
+CloseType.GET_ACCOUNTS_PROOF_TIMEOUT = 11;
+CloseType.GET_TRANSACTIONS_PROOF_TIMEOUT = 12;
+CloseType.GET_TRANSACTION_RECEIPTS_TIMEOUT = 13;
+CloseType.INVALID_ACCOUNTS_PROOF = 14;
+CloseType.ACCOUNTS_PROOF_ROOT_HASH_MISMATCH = 15;
+CloseType.INCOMPLETE_ACCOUNTS_PROOF = 16;
+CloseType.INVALID_BLOCK = 17;
+CloseType.INVALID_CHAIN_PROOF = 18;
+CloseType.INVALID_TRANSACTION_PROOF = 19;
+
+CloseType.SENDING_PING_MESSAGE_FAILED = 22;
+CloseType.SENDING_OF_VERSION_MESSAGE_FAILED = 29;
+
+CloseType.DUPLICATE_CONNECTION = 30;
+CloseType.PEER_IS_BANNED = 31;
+CloseType.CONNECTION_LIMIT_PER_IP = 32;
+CloseType.MANUAL_NETWORK_DISCONNECT  = 33;
+CloseType.MANUAL_WEBSOCKET_DISCONNECT  = 34;
+CloseType.MAX_PEER_COUNT_REACHED  = 35;
+
+CloseType.PEER_CONNECTION_RECYCLED  = 36;
+CloseType.PEER_CONNECTION_RECYCLED_INBOUND_EXCHANGE  = 37;
+
+// Ban Close Types
+
+CloseType.RECEIVED_INVALID_BLOCK = 100;
+CloseType.BLOCKCHAIN_SYNC_FAILED = 101;
+CloseType.RECEIVED_INVALID_HEADER = 102;
+CloseType.RECEIVED_TRANSACTION_NOT_MATCHING_OUR_SUBSCRIPTION = 103;
+CloseType.ADDR_MESSAGE_TOO_LARGE = 104;
+CloseType.INVALID_ADDR = 105;
+CloseType.ADDR_NOT_GLOBALLY_REACHABLE = 106;
+CloseType.INVALID_SIGNAL_TTL = 107;
+CloseType.INVALID_SIGNATURE = 108;
+CloseType.INCOMPATIBLE_VERSION = 109;
+CloseType.INVALID_PUBLIC_KEY_IN_VERACK_MESSAGE = 110;
+CloseType.INVALID_SIGNATURE_IN_VERACK_MESSAGE  = 111;
+CloseType.DIFFERENT_GENESIS_BLOCK = 112;
+CloseType.INVALID_PEER_ADDRESS_IN_VERSION_MESSAGE = 113;
+CloseType.UNEXPECTED_PEER_ADDRESS_IN_VERSION_MESSAGE = 114;
+
+// Fail Close Types
+
+CloseType.CLOSED_BY_REMOTE = 200;
+CloseType.PING_TIMEOUT = 201;
+CloseType.CONNECTION_FAILED = 202;
+CloseType.NETWORK_ERROR = 203;
+CloseType.VERSION_TIMEOUT = 204;
+CloseType.VERACK_TIMEOUT = 205;
+
+Class.register(CloseType);
+
+class NetworkConnection extends Observable {
+    /**
+     * @param {DataChannel} channel
+     * @param {number} protocol
+     * @param {NetAddress} netAddress
+     * @param {PeerAddress} peerAddress
+     */
+    constructor(channel, protocol, netAddress, peerAddress) {
+        super();
+        /** @type {DataChannel} */
+        this._channel = channel;
+
+        /** @type {number} */
+        this._protocol = protocol;
+        /** @type {NetAddress} */
+        this._netAddress = netAddress;
+        /** @type {PeerAddress} */
+        this._peerAddress = peerAddress;
+
+        /** @type {number} */
+        this._bytesSent = 0;
+        /** @type {number} */
+        this._bytesReceived = 0;
+
+        /** @type {boolean} */
+        this._inbound = !peerAddress;
+
+        /** @type {boolean} */
+        this._closed = false;
+
+        /** @type {*} */
+        this._lastError = null;
+
+        // Unique id for this connection.
+        /** @type {number} */
+        this._id = NetworkConnection._instanceCount++;
+
+        this._channel.on('message', msg => this._onMessage(msg));
+        this._channel.on('close', () => this._onClose(CloseType.CLOSED_BY_REMOTE, 'Closed by remote'));
+        this._channel.on('error', e => this._onError(e));
+    }
+
+    _onMessage(msg) {
+        // Don't emit messages if this channel is closed.
+        if (this._closed) {
+            return;
+        }
+
+        this._bytesReceived += msg.byteLength || msg.length;
+        this.fire('message', msg, this);
+    }
+
+    /**
+     * @param {*} e
+     * @private
+     */
+    _onError(e) {
+        this._lastError = e;
+        this.fire('error', e, this);
+    }
+
+    /**
+     * @param {number} [type]
+     * @param {string} [reason]
+     * @private
+     */
+    _onClose(type, reason) {
+        // Don't fire close event again when already closed.
+        if (this._closed) {
+            return;
+        }
+
+        // Mark this connection as closed.
+        this._closed = true;
+
+        // Propagate last network error.
+        if (type === CloseType.CLOSED_BY_REMOTE && this._lastError) {
+            type = CloseType.NETWORK_ERROR;
+            reason = this._lastError;
+        }
+
+        // Tell listeners that this connection has closed.
+        this.fire('close', type, reason, this);
+    }
+
+    /**
+     * @param {number} [type]
+     * @param {string} [reason]
+     * @private
+     */
+    _close(type, reason) {
+        // Don't wait for the native close event to fire.
+        this._onClose(type, reason);
+
+        // Close the native channel.
+        this._channel.close();
+    }
+
+    /**
+     * @return {boolean}
+     * @private
+     */
+    _isChannelOpen() {
+        return this._channel.readyState === DataChannel.ReadyState.OPEN;
+    }
+
+    /**
+     * @return {boolean}
+     * @private
+     */
+    _isChannelClosing() {
+        return this._channel.readyState === DataChannel.ReadyState.CLOSING;
+    }
+
+    /**
+     * @return {boolean}
+     * @private
+     */
+    _isChannelClosed() {
+        return this._channel.readyState === DataChannel.ReadyState.CLOSED;
+    }
+
+    /**
+     * @param {Uint8Array} msg
+     * @return {boolean}
+     */
+    send(msg) {
+        const logAddress = this._peerAddress || this._netAddress;
+        if (this._closed) {
+            return false;
+        }
+
+        // Fire close event (early) if channel is closing/closed.
+        if (this._isChannelClosing() || this._isChannelClosed()) {
+            Log.w(NetworkConnection, `Not sending data to ${logAddress} - channel closing/closed (${this._channel.readyState})`);
+            this._onClose();
+            return false;
+        }
+
+        // Don't attempt to send if channel is not (yet) open.
+        if (!this._isChannelOpen()) {
+            Log.w(NetworkConnection, `Not sending data to ${logAddress} - channel not open (${this._channel.readyState})`);
+            return false;
+        }
+
+        try {
+            this._channel.send(msg);
+            this._bytesSent += msg.byteLength || msg.length;
+            return true;
+        } catch (e) {
+            Log.e(NetworkConnection, `Failed to send data to ${logAddress}: ${e.message || e}`);
+            return false;
+        }
+    }
+
+    /**
+     * @param {Message.Type|Array.<Message.Type>} types
+     * @param {function()} timeoutCallback
+     * @param {number} [msgTimeout]
+     * @param {number} [chunkTimeout]
+     */
+    expectMessage(types, timeoutCallback, msgTimeout, chunkTimeout) {
+        this._channel.expectMessage(types, timeoutCallback, msgTimeout, chunkTimeout);
+    }
+
+    /**
+     * @param {Message.Type} type
+     * @returns {boolean}
+     */
+    isExpectingMessage(type) {
+        return this._channel.isExpectingMessage(type);
+    }
+
+    /**
+     * @param {number} [type]
+     * @param {string} [reason]
+     */
+    close(type, reason) {
+        const connType = this._inbound ? 'inbound' : 'outbound';
+        Log.d(NetworkConnection, `Closing ${connType} connection #${this._id} ${this._peerAddress || this._netAddress}` + (reason ? ` - ${reason}` : '') + ` (${type})`);
+        this._close(type, reason);
+    }
+
+    /**
+     * @param {NetworkConnection} o
+     * @return {boolean}
+     */
+    equals(o) {
+        return o instanceof NetworkConnection
+            && this._id === o.id;
+    }
+
+    /**
+     * @returns {string}
+     */
+    hashCode() {
+        return this._id.toString();
+    }
+
+    /**
+     * @return {string}
+     */
+    toString() {
+        return `NetworkConnection{id=${this._id}, protocol=${this._protocol}, peerAddress=${this._peerAddress}, netAddress=${this._netAddress}}`;
+    }
+
+    /** @type {number} */
+    get id() {
+        return this._id;
+    }
+
+    /** @type {number} */
+    get protocol() {
+        return this._protocol;
+    }
+
+    /** @type {PeerAddress} */
+    get peerAddress() {
+        return this._peerAddress;
+    }
+
+    /** @type {PeerAddress} */
+    set peerAddress(value) {
+        this._peerAddress = value;
+    }
+
+    /** @type {NetAddress} */
+    get netAddress() {
+        return this._netAddress;
+    }
+
+    /** @type {NetAddress} */
+    set netAddress(value) {
+        this._netAddress = value;
+    }
+
+    /** @type {number} */
+    get bytesSent() {
+        return this._bytesSent;
+    }
+
+    /** @type {number} */
+    get bytesReceived() {
+        return this._bytesReceived;
+    }
+
+    /** @type {boolean} */
+    get inbound() {
+        return this._inbound;
+    }
+
+    /** @type {boolean} */
+    get outbound() {
+        return !this._inbound;
+    }
+
+    /** @type {boolean} */
+    get closed() {
+        return this._closed;
+    }
+}
+// Used to generate unique NetworkConnection ids.
+NetworkConnection._instanceCount = 0;
+Class.register(NetworkConnection);
+
+class PeerChannel extends Observable {
+    /**
+     * @listens NetworkConnection#message
+     * @param {NetworkConnection} connection
+     */
+    constructor(connection) {
+        super();
+        this._conn = connection;
+        this._conn.on('message', msg => this._onMessage(msg));
+
+        // Forward specified events on the connection to listeners of this Observable.
+        this.bubble(this._conn, 'close', 'error');
+    }
+
+    /**
+     * @param {Uint8Array} rawMsg
+     * @private
+     */
+    _onMessage(rawMsg) {
+        let msg = null, type = null;
+
+        try {
+            const buf = new SerialBuffer(rawMsg);
+            type = MessageFactory.peekType(buf);
+            msg = MessageFactory.parse(buf);
+        } catch(e) {
+            Log.w(PeerChannel, `Failed to parse message from ${this.peerAddress || this.netAddress}`, e.message || e);
+
+            // From the Bitcoin Reference:
+            //  "Be careful of reject message feedback loops where two peers
+            //   each don’t understand each other’s reject messages and so keep
+            //   sending them back and forth forever."
+
+            // If the message does not make sense at a whole or we fear to get into a reject loop,
+            // we ban the peer instead.
+            if (!type || type === Message.Type.REJECT) {
+                this.close(CloseType.FAILED_TO_PARSE_MESSAGE_TYPE, 'Failed to parse message type');
+                return;
+            }
+
+            // Otherwise inform other node and ignore message.
+            this.reject(type, RejectMessage.Code.REJECT_MALFORMED, e.message || e);
+            return;
+        }
+
+        if (!msg) return;
+
+        try {
+            this.fire(PeerChannel.Event[msg.type], msg, this);
+            this.fire('message-log', msg, this);
+        } catch (e) {
+            Log.w(PeerChannel, `Error while processing ${msg.type} message from ${this.peerAddress || this.netAddress}: ${e}`);
+        }
+    }
+
+    /**
+     * @param {Message.Type|Array.<Message.Type>} types
+     * @param {function()} timeoutCallback
+     * @param {number} [msgTimeout]
+     * @param {number} [chunkTimeout]
+     */
+    expectMessage(types, timeoutCallback, msgTimeout, chunkTimeout) {
+        this._conn.expectMessage(types, timeoutCallback, msgTimeout, chunkTimeout);
+    }
+
+    /**
+     * @param {Message.Type} type
+     * @returns {boolean}
+     */
+    isExpectingMessage(type) {
+        return this._conn.isExpectingMessage(type);
+    }
+
+    /**
+     * @param {Message} msg
+     * @return {boolean}
+     * @private
+     */
+    _send(msg) {
+        return this._conn.send(msg.serialize());
+    }
+
+    /**
+     * @param {number} [type]
+     * @param {string} [reason]
+     */
+    close(type, reason) {
+        this._conn.close(type, reason);
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @param {Hash} headHash
+     * @param {Uint8Array} challengeNonce
+     * @return {boolean}
+     */
+    version(peerAddress, headHash, challengeNonce) {
+        return this._send(new VersionMessage(Version.CODE, peerAddress, Block.GENESIS.HASH, headHash, challengeNonce));
+    }
+
+    /**
+     * @param {PublicKey} publicKey
+     * @param {Signature} signature
+     * @returns {boolean}
+     */
+    verack(publicKey, signature) {
+        return this._send(new VerAckMessage(publicKey, signature));
+    }
+
+    /**
+     * @param {Array.<InvVector>} vectors
+     * @return {boolean}
+     */
+    inv(vectors) {
+        return this._send(new InvMessage(vectors));
+    }
+
+    /**
+     * @param {Array.<InvVector>} vectors
+     * @return {boolean}
+     */
+    notFound(vectors) {
+        return this._send(new NotFoundMessage(vectors));
+    }
+
+    /**
+     * @param {Array.<InvVector>} vectors
+     * @return {boolean}
+     */
+    getData(vectors) {
+        return this._send(new GetDataMessage(vectors));
+    }
+
+    /**
+     * @param {Array.<InvVector>} vectors
+     * @return {boolean}
+     */
+    getHeader(vectors) {
+        return this._send(new GetHeaderMessage(vectors));
+    }
+
+    /**
+     * @param {Block} block
+     * @return {boolean}
+     */
+    block(block) {
+        return this._send(new BlockMessage(block));
+    }
+
+    /**
+     * @param {BlockHeader} header
+     * @return {boolean}
+     */
+    header(header) {
+        return this._send(new HeaderMessage(header));
+    }
+
+    /**
+     * @param {Transaction} transaction
+     * @param {?AccountsProof} [accountsProof]
+     * @return {boolean}
+     */
+    tx(transaction, accountsProof) {
+        return this._send(new TxMessage(transaction, accountsProof));
+    }
+
+    /**
+     * @param {Array.<Hash>} locators
+     * @param {number} maxInvSize
+     * @param {boolean} [ascending]
+     * @return {boolean}
+     */
+    getBlocks(locators, maxInvSize=BaseInventoryMessage.VECTORS_MAX_COUNT, ascending=true) {
+        return this._send(new GetBlocksMessage(locators, maxInvSize, ascending ? GetBlocksMessage.Direction.FORWARD : GetBlocksMessage.Direction.BACKWARD));
+    }
+
+    /**
+     * @return {boolean}
+     */
+    mempool() {
+        return this._send(new MempoolMessage());
+    }
+
+    /**
+     * @param {Message.Type} messageType
+     * @param {RejectMessage.Code} code
+     * @param {string} reason
+     * @param {Uint8Array} [extraData]
+     * @return {boolean}
+     */
+    reject(messageType, code, reason, extraData) {
+        return this._send(new RejectMessage(messageType, code, reason, extraData));
+    }
+
+    /**
+     * @param {Subscription} subscription
+     * @returns {boolean}
+     */
+    subscribe(subscription) {
+        return this._send(new SubscribeMessage(subscription));
+    }
+
+    /**
+     * @param {Array.<PeerAddress>} addresses
+     * @return {boolean}
+     */
+    addr(addresses) {
+        return this._send(new AddrMessage(addresses));
+    }
+
+    /**
+     * @param {number} protocolMask
+     * @param {number} serviceMask
+     * @return {boolean}
+     */
+    getAddr(protocolMask, serviceMask) {
+        return this._send(new GetAddrMessage(protocolMask, serviceMask));
+    }
+
+    /**
+     * @param {number} nonce
+     * @return {boolean}
+     */
+    ping(nonce) {
+        return this._send(new PingMessage(nonce));
+    }
+
+    /**
+     * @param {number} nonce
+     * @return {boolean}
+     */
+    pong(nonce) {
+        return this._send(new PongMessage(nonce));
+    }
+
+    /**
+     * @param {PeerId} senderId
+     * @param {PeerId} recipientId
+     * @param {number} nonce
+     * @param {number} ttl
+     * @param {SignalMessage.Flags|number} flags
+     * @param {Uint8Array} [payload]
+     * @param {PublicKey} [senderPubKey]
+     * @param {Signature} [signature]
+     * @return {boolean}
+     */
+    signal(senderId, recipientId, nonce, ttl, flags, payload, senderPubKey, signature) {
+        return this._send(new SignalMessage(senderId, recipientId, nonce, ttl, flags, payload, senderPubKey, signature));
+    }
+
+    /**
+     * @param {Hash} blockHash
+     * @param {Array.<Address>} addresses
+     * @return {boolean}
+     */
+    getAccountsProof(blockHash, addresses) {
+        return this._send(new GetAccountsProofMessage(blockHash, addresses));
+    }
+
+    /**
+     * @param {Hash} blockHash
+     * @param {AccountsProof} [proof]
+     * @return {boolean}
+     */
+    accountsProof(blockHash, proof) {
+        return this._send(new AccountsProofMessage(blockHash, proof));
+    }
+
+    /**
+     * @return {boolean}
+     */
+    getChainProof() {
+        return this._send(new GetChainProofMessage());
+    }
+
+    /**
+     * @param {ChainProof} proof
+     * @return {boolean}
+     */
+    chainProof(proof) {
+        return this._send(new ChainProofMessage(proof));
+    }
+
+    /**
+     * @param {Hash} blockHash
+     * @param {string} startPrefix
+     * @return {boolean}
+     */
+    getAccountsTreeChunk(blockHash, startPrefix) {
+        return this._send(new GetAccountsTreeChunkMessage(blockHash, startPrefix));
+    }
+
+    /**
+     * @param {Hash} blockHash
+     * @param {AccountsTreeChunk} [chunk]
+     * @return {boolean}
+     */
+    accountsTreeChunk(blockHash, chunk) {
+        return this._send(new AccountsTreeChunkMessage(blockHash, chunk));
+    }
+
+    /**
+     * @param {Hash} blockHash
+     * @param {Array.<Address>} addresses
+     * @return {boolean}
+     */
+    getTransactionsProof(blockHash, addresses) {
+        return this._send(new GetTransactionsProofMessage(blockHash, addresses));
+    }
+
+    /**
+     * @param {Hash} blockHash
+     * @param {TransactionsProof} [proof]
+     * @return {boolean}
+     */
+    transactionsProof(blockHash, proof) {
+        return this._send(new TransactionsProofMessage(blockHash, proof));
+    }
+
+    /**
+     * @param {Address} address
+     * @returns {boolean}
+     */
+    getTransactionReceipts(address) {
+        return this._send(new GetTransactionReceiptsMessage(address));
+    }
+
+    /**
+     * @param {Array.<TransactionReceipt>} transactionReceipts
+     * @returns {boolean}
+     */
+    transactionReceipts(transactionReceipts) {
+        return this._send(new TransactionReceiptsMessage(transactionReceipts));
+    }
+
+    /**
+     * @param {PeerChannel} o
+     * @return {boolean}
+     */
+    equals(o) {
+        return o instanceof PeerChannel
+            && this._conn.equals(o.connection);
+    }
+
+    /**
+     * @returns {string}
+     */
+    hashCode() {
+        return this._conn.hashCode();
+    }
+
+    /**
+     * @return {string}
+     */
+    toString() {
+        return `PeerChannel{conn=${this._conn}}`;
+    }
+
+    /** @type {NetworkConnection} */
+    get connection() {
+        return this._conn;
+    }
+
+    /** @type {number} */
+    get id() {
+        return this._conn.id;
+    }
+
+    /** @type {number} */
+    get protocol() {
+        return this._conn.protocol;
+    }
+
+    /** @type {PeerAddress} */
+    get peerAddress() {
+        return this._conn.peerAddress;
+    }
+
+    /** @type {PeerAddress} */
+    set peerAddress(value) {
+        this._conn.peerAddress = value;
+    }
+
+    /** @type {NetAddress} */
+    get netAddress() {
+        return this._conn.netAddress;
+    }
+
+    /** @type {NetAddress} */
+    set netAddress(value) {
+        this._conn.netAddress = value;
+    }
+
+    /** @type {boolean} */
+    get closed() {
+        return this._conn.closed;
+    }
+}
+Class.register(PeerChannel);
+
+PeerChannel.Event = {};
+PeerChannel.Event[Message.Type.VERSION] = 'version';
+PeerChannel.Event[Message.Type.INV] = 'inv';
+PeerChannel.Event[Message.Type.GET_DATA] = 'get-data';
+PeerChannel.Event[Message.Type.GET_HEADER] = 'get-header';
+PeerChannel.Event[Message.Type.NOT_FOUND] = 'not-found';
+PeerChannel.Event[Message.Type.GET_BLOCKS] = 'get-blocks';
+PeerChannel.Event[Message.Type.BLOCK] = 'block';
+PeerChannel.Event[Message.Type.HEADER] = 'header';
+PeerChannel.Event[Message.Type.TX] = 'tx';
+PeerChannel.Event[Message.Type.MEMPOOL] = 'mempool';
+PeerChannel.Event[Message.Type.REJECT] = 'reject';
+PeerChannel.Event[Message.Type.SUBSCRIBE] = 'subscribe';
+PeerChannel.Event[Message.Type.ADDR] = 'addr';
+PeerChannel.Event[Message.Type.GET_ADDR] = 'get-addr';
+PeerChannel.Event[Message.Type.PING] = 'ping';
+PeerChannel.Event[Message.Type.PONG] = 'pong';
+PeerChannel.Event[Message.Type.SIGNAL] = 'signal';
+PeerChannel.Event[Message.Type.GET_CHAIN_PROOF] = 'get-chain-proof';
+PeerChannel.Event[Message.Type.CHAIN_PROOF] = 'chain-proof';
+PeerChannel.Event[Message.Type.GET_ACCOUNTS_PROOF] = 'get-accounts-proof';
+PeerChannel.Event[Message.Type.ACCOUNTS_PROOF] = 'accounts-proof';
+PeerChannel.Event[Message.Type.GET_ACCOUNTS_TREE_CHUNK] = 'get-accounts-tree-chunk';
+PeerChannel.Event[Message.Type.ACCOUNTS_TREE_CHUNK] = 'accounts-tree-chunk';
+PeerChannel.Event[Message.Type.GET_TRANSACTIONS_PROOF] = 'get-transactions-proof';
+PeerChannel.Event[Message.Type.TRANSACTIONS_PROOF] = 'transactions-proof';
+PeerChannel.Event[Message.Type.GET_TRANSACTION_RECEIPTS] = 'get-transaction-receipts';
+PeerChannel.Event[Message.Type.TRANSACTION_RECEIPTS] = 'transaction-receipts';
+PeerChannel.Event[Message.Type.VERACK] = 'verack';
+
 class NetworkAgent extends Observable {
     /**
      * @param {IBlockchain} blockchain
-     * @param {PeerAddresses} addresses
+     * @param {PeerAddressBook} addresses
      * @param {NetworkConfig} networkConfig
      * @param {PeerChannel} channel
      *
@@ -28792,7 +29455,7 @@ class NetworkAgent extends Observable {
         super();
         /** @type {IBlockchain} */
         this._blockchain = blockchain;
-        /** @type {PeerAddresses} */
+        /** @type {PeerAddressBook} */
         this._addresses = addresses;
         /** @type {NetworkConfig} */
         this._networkConfig = networkConfig;
@@ -28856,12 +29519,6 @@ class NetworkAgent extends Observable {
         this._versionAttempts = 0;
 
         /**
-         * @type {PeerAddress}
-         * @private
-         */
-        this._observedPeerAddress = null;
-
-        /**
          * @type {boolean}
          * @private
          */
@@ -28872,6 +29529,12 @@ class NetworkAgent extends Observable {
          * @private
          */
         this._peerChallengeNonce = null;
+
+        /**
+         * @type {Map.<number, number>}
+         * @private
+         */
+        this._pingTimes = new Map();
 
         /** @type {Uint8Array} */
         this._challengeNonce = new Uint8Array(VersionMessage.CHALLENGE_SIZE);
@@ -28886,7 +29549,7 @@ class NetworkAgent extends Observable {
         channel.on('pong', msg => this._onPong(msg));
 
         // Clean up when the peer disconnects.
-        channel.on('close', closedByRemote => this._onClose(closedByRemote));
+        channel.on('close', () => this._onClose());
     }
 
     /**
@@ -28902,7 +29565,7 @@ class NetworkAgent extends Observable {
         // the peer knows is older than RELAY_THROTTLE, relay the address again.
         const filteredAddresses = addresses.filter(addr => {
             // Exclude RTC addresses that are already at MAX_DISTANCE.
-            if (addr.protocol === Protocol.RTC && addr.distance >= PeerAddresses.MAX_DISTANCE) {
+            if (addr.protocol === Protocol.RTC && addr.distance >= PeerAddressBook.MAX_DISTANCE) {
                 return false;
             }
 
@@ -28941,7 +29604,7 @@ class NetworkAgent extends Observable {
         if (!this._channel.version(this._networkConfig.peerAddress, this._blockchain.headHash, this._challengeNonce)) {
             this._versionAttempts++;
             if (this._versionAttempts >= NetworkAgent.VERSION_ATTEMPTS_MAX) {
-                this._channel.close('sending of version message failed');
+                this._channel.close(CloseType.SENDING_OF_VERSION_MESSAGE_FAILED, 'sending of version message failed');
                 return;
             }
 
@@ -28957,7 +29620,7 @@ class NetworkAgent extends Observable {
             // TODO Should we ban instead?
             this._timers.setTimeout('version', () => {
                 this._timers.clearTimeout('version');
-                this._channel.close('version timeout');
+                this._channel.close(CloseType.VERSION_TIMEOUT, 'version timeout');
             }, NetworkAgent.HANDSHAKE_TIMEOUT);
         } else if (this._peerAddressVerified) {
             this._sendVerAck();
@@ -28965,7 +29628,7 @@ class NetworkAgent extends Observable {
 
         this._timers.setTimeout('verack', () => {
             this._timers.clearTimeout('verack');
-            this._channel.close('verack timeout');
+            this._channel.close(CloseType.VERACK_TIMEOUT, 'verack timeout');
         }, NetworkAgent.HANDSHAKE_TIMEOUT);
     }
 
@@ -28985,7 +29648,7 @@ class NetworkAgent extends Observable {
 
         // Ignore duplicate version messages.
         if (this._versionReceived) {
-            Log.d(NetworkAgent, () => `Ignoring duplicate version message from ${this._observedPeerAddress}`);
+            Log.d(NetworkAgent, () => `Ignoring duplicate version message from ${this._channel.peerAddress}`);
             return;
         }
 
@@ -28995,19 +29658,19 @@ class NetworkAgent extends Observable {
         // Check if the peer is running a compatible version.
         if (!Version.isCompatible(msg.version)) {
             this._channel.reject(Message.Type.VERSION, RejectMessage.Code.REJECT_OBSOLETE, `incompatible version (ours=${Version.CODE}, theirs=${msg.version})`);
-            this._channel.ban(`incompatible version (ours=${Version.CODE}, theirs=${msg.version})`);
+            this._channel.close(CloseType.INCOMPATIBLE_VERSION, `incompatible version (ours=${Version.CODE}, theirs=${msg.version})`);
             return;
         }
 
         // Check if the peer is working on the same genesis block.
         if (!Block.GENESIS.HASH.equals(msg.genesisHash)) {
-            this._channel.ban(`different genesis block (${msg.genesisHash})`);
+            this._channel.close(CloseType.DIFFERENT_GENESIS_BLOCK, `different genesis block (${msg.genesisHash})`);
             return;
         }
 
         // Check that the given peerAddress is correctly signed.
         if (!msg.peerAddress.verifySignature()) {
-            this._channel.ban('invalid peerAddress in version message');
+            this._channel.close(CloseType.INVALID_PEER_ADDRESS_IN_VERSION_MESSAGE, 'invalid peerAddress in version message');
             return;
         }
 
@@ -29016,25 +29679,26 @@ class NetworkAgent extends Observable {
         // Check that the given peerAddress matches the one we expect.
         // In case of inbound WebSocket connections, this is the first time we
         // see the remote peer's peerAddress.
-        // TODO We should validate that the given peerAddress actually resolves
-        // to the peer's netAddress!
+        const peerAddress = msg.peerAddress;
         if (this._channel.peerAddress) {
-            if (!this._channel.peerAddress.equals(msg.peerAddress)) {
-                this._channel.ban('unexpected peerAddress in version message');
+            if (!this._channel.peerAddress.equals(peerAddress)) {
+                this._channel.close(CloseType.UNEXPECTED_PEER_ADDRESS_IN_VERSION_MESSAGE, 'unexpected peerAddress in version message');
                 return;
             }
             this._peerAddressVerified = true;
         }
 
         // The client might not send its netAddress. Set it from our address database if we have it.
-        this._observedPeerAddress = msg.peerAddress;
-        if (!this._observedPeerAddress.netAddress) {
+        if (!peerAddress.netAddress || peerAddress.netAddress.isPseudo()) {
             /** @type {PeerAddress} */
-            const storedAddress = this._addresses.get(this._observedPeerAddress);
+            const storedAddress = this._addresses.get(peerAddress);
             if (storedAddress && storedAddress.netAddress) {
-                this._observedPeerAddress.netAddress = storedAddress.netAddress;
+                peerAddress.netAddress = storedAddress.netAddress;
             }
         }
+
+        // Set/update the channel's peer address.
+        this._channel.peerAddress = peerAddress;
 
         // Create peer object. Since the initial version message received from the
         // peer contains their local timestamp, we can use it to calculate their
@@ -29043,11 +29707,20 @@ class NetworkAgent extends Observable {
             this._channel,
             msg.version,
             msg.headHash,
-            this._observedPeerAddress.timestamp - now
+            peerAddress.timestamp - now
         );
 
         this._peerChallengeNonce = msg.challengeNonce;
         this._versionReceived = true;
+
+        // Tell listeners that we received this peer's version information.
+        // Listeners registered to this event might close the connection to this peer.
+        this.fire('version', this._peer, this);
+
+        // Abort handshake if the connection was closed.
+        if (this._channel.closed) {
+            return;
+        }
 
         if (!this._versionSent) {
             this.handshake();
@@ -29066,7 +29739,7 @@ class NetworkAgent extends Observable {
     _sendVerAck() {
         Assert.that(this._peerAddressVerified);
 
-        const data = BufferUtils.concatTypedArrays(this._observedPeerAddress.peerId.serialize(), this._peerChallengeNonce);
+        const data = BufferUtils.concatTypedArrays(this._channel.peerAddress.peerId.serialize(), this._peerChallengeNonce);
         const signature = Signature.create(this._networkConfig.keyPair.privateKey, this._networkConfig.keyPair.publicKey, data);
         this._channel.verack(this._networkConfig.keyPair.publicKey, signature);
 
@@ -29078,7 +29751,7 @@ class NetworkAgent extends Observable {
      * @private
      */
     _onVerAck(msg) {
-        Log.d(NetworkAgent, () => `[VERACK] from ${this._observedPeerAddress}`);
+        Log.d(NetworkAgent, () => `[VERACK] from ${this._channel.peerAddress}`);
 
         // Make sure this is a valid message in our current state.
         if (!this._canAcceptMessage(msg)) {
@@ -29087,7 +29760,7 @@ class NetworkAgent extends Observable {
 
         // Ignore duplicate verack messages.
         if (this._verackReceived) {
-            Log.d(NetworkAgent, () => `Ignoring duplicate verack message from ${this._observedPeerAddress}`);
+            Log.d(NetworkAgent, () => `Ignoring duplicate verack message from ${this._channel.peerAddress}`);
             return;
         }
 
@@ -29095,15 +29768,15 @@ class NetworkAgent extends Observable {
         this._timers.clearTimeout('verack');
 
         // Verify public key
-        if (!msg.publicKey.toPeerId().equals(this._observedPeerAddress.peerId)) {
-            this._channel.ban('Invalid public key in verack message');
+        if (!msg.publicKey.toPeerId().equals(this._channel.peerAddress.peerId)) {
+            this._channel.close(CloseType.INVALID_PUBLIC_KEY_IN_VERACK_MESSAGE, 'Invalid public key in verack message');
             return;
         }
 
         // Verify signature
         const data = BufferUtils.concatTypedArrays(this._networkConfig.peerAddress.peerId.serialize(), this._challengeNonce);
         if (!msg.signature.verify(msg.publicKey, data)) {
-            this._channel.ban('Invalid signature in verack message');
+            this._channel.close(CloseType.INVALID_SIGNATURE_IN_VERACK_MESSAGE, 'Invalid signature in verack message');
             return;
         }
 
@@ -29111,8 +29784,6 @@ class NetworkAgent extends Observable {
             this._peerAddressVerified = true;
             this._sendVerAck();
         }
-
-        this._channel.peerAddress = this._observedPeerAddress;
 
         // Remember that the peer has sent us this address.
         this._knownAddresses.add(this._channel.peerAddress);
@@ -29136,7 +29807,7 @@ class NetworkAgent extends Observable {
             () => this._channel.addr([this._networkConfig.peerAddress]),
             NetworkAgent.ANNOUNCE_ADDR_INTERVAL);
 
-        // Tell listeners about the new peer that connected.
+        // Tell listeners that the handshake with this peer succeeded.
         this.fire('handshake', this._peer, this);
 
         // Request new network addresses from the peer.
@@ -29167,18 +29838,18 @@ class NetworkAgent extends Observable {
         // Reject messages that contain more than 1000 addresses, ban peer (bitcoin).
         if (msg.addresses.length > 1000) {
             Log.w(NetworkAgent, 'Rejecting addr message - too many addresses');
-            this._channel.ban('addr message too large');
+            this._channel.close(CloseType.ADDR_MESSAGE_TOO_LARGE, 'addr message too large');
             return;
         }
 
         // Remember that the peer has sent us these addresses.
         for (const addr of msg.addresses) {
             if (!addr.verifySignature()) {
-                this._channel.ban('invalid addr');
+                this._channel.close(CloseType.INVALID_ADDR, 'invalid addr');
                 return;
             }
             if (addr.protocol === Protocol.WS && !addr.globallyReachable()) {
-                this._channel.ban('addr not globally reachable');
+                this._channel.close(CloseType.ADDR_NOT_GLOBALLY_REACHABLE, 'addr not globally reachable');
                 return;
             }
             this._knownAddresses.add(addr);
@@ -29207,7 +29878,7 @@ class NetworkAgent extends Observable {
 
         const filteredAddresses = addresses.filter(addr => {
             // Exclude RTC addresses that are already at MAX_DISTANCE.
-            if (addr.protocol === Protocol.RTC && addr.distance >= PeerAddresses.MAX_DISTANCE) {
+            if (addr.protocol === Protocol.RTC && addr.distance >= PeerAddressBook.MAX_DISTANCE) {
                 return false;
             }
 
@@ -29233,14 +29904,18 @@ class NetworkAgent extends Observable {
         // Send ping message to peer.
         // If sending the ping message fails, assume the connection has died.
         if (!this._channel.ping(nonce)) {
-            this._channel.close('sending ping message failed');
+            this._channel.close(CloseType.SENDING_PING_MESSAGE_FAILED, 'sending ping message failed');
             return;
         }
+
+        // Save ping timestamp to detect the speed of the connection
+        this._pingTimes.set(nonce, Date.now());
 
         // Drop peer if it doesn't answer with a matching pong message within the timeout.
         this._timers.setTimeout(`ping_${nonce}`, () => {
             this._timers.clearTimeout(`ping_${nonce}`);
-            this._channel.fail('ping timeout');
+            this._channel.close(CloseType.PING_TIMEOUT, 'ping timeout');
+            this._pingTimes.delete(nonce);
         }, NetworkAgent.PING_TIMEOUT);
     }
 
@@ -29260,23 +29935,30 @@ class NetworkAgent extends Observable {
 
     /**
      * @param {PongMessage} msg
+     * @fires NetworkAgent#ping-pong
      * @private
      */
     _onPong(msg) {
         // Clear the ping timeout for this nonce.
         this._timers.clearTimeout(`ping_${msg.nonce}`);
+
+        /** @type {number} */
+        const startTime = this._pingTimes.get(msg.nonce);
+        if (startTime) {
+            const delta = Date.now() - startTime;
+            if (delta > 0) {
+                this.fire('ping-pong', delta);
+            }
+            this._pingTimes.delete(msg.nonce);
+        }
     }
 
     /**
-     * @param {boolean} closedByRemote
      * @private
      */
-    _onClose(closedByRemote) {
+    _onClose() {
         // Clear all timers and intervals when the peer disconnects.
         this._timers.clearAll();
-
-        // Tell listeners that the peer has disconnected.
-        this.fire('close', this._peer, this._channel, closedByRemote, this);
     }
 
     /**
@@ -29318,6 +30000,1454 @@ NetworkAgent.RELAY_THROTTLE = 1000 * 60 * 2; // 2 minutes
 NetworkAgent.VERSION_ATTEMPTS_MAX = 10;
 NetworkAgent.VERSION_RETRY_DELAY = 500; // 500 ms
 Class.register(NetworkAgent);
+
+class PeerConnectionStatistics {
+    /**
+     * @constructor
+     */
+    constructor() {
+        /**
+         * @type {Array<number>}
+         * @private
+         */
+        this._latencies = [];
+
+        /**
+         * @type {HashMap<number, number>}
+         * @private
+         */
+        this._messages = new HashMap();
+    }
+
+    /**
+     * @returns {void}
+     */
+    reset() {
+        this._latencies = [];
+        this._messages = new HashMap();
+    }
+
+    /**
+     * @param {number} latency
+     * @returns {void}
+     */
+    addLatency(latency) {
+        this._latencies.push(latency);
+    }
+
+    /**
+     * @param {Message} msg
+     * @returns {void}
+     */
+    addMessage(msg) {
+        this._messages.put(msg.type, this._messages.contains(msg.type) ? this._messages.get(msg.type) + 1 : 1);
+    }
+
+    /**
+     * @param {number} msgType
+     * @returns {number}
+     */
+    getMessageCount(msgType) {
+        return this._messages.contains(msgType) ? this._messages.get(msgType) : 0;
+    }
+
+    /** @type {number} */
+    get latencyMedian() {
+        const length = this._latencies.length;
+
+        if (length === 0) {
+            return 0;
+        }
+
+        this._latencies.sort((a, b) => a - b);
+        let median;
+        if ((length % 2) === 0) {
+            median = Math.round((this._latencies[(length / 2) - 1] + this._latencies[length / 2]) / 2);
+        } else {
+            median = this._latencies[(length - 1) / 2];
+        }
+        return median;
+    }
+
+}
+Class.register(PeerConnectionStatistics);
+
+class PeerConnection {
+    /**
+     * @param {PeerAddress} peerAddress
+     * @returns {PeerConnection}
+     */
+    static getOutbound(peerAddress) {
+        const peerConnection = new PeerConnection();
+        peerConnection._peerAddress = peerAddress;
+        peerConnection._state = PeerConnectionState.CONNECTING;
+        return peerConnection;
+    }
+
+    /**
+     * @param {NetworkConnection} networkConnection
+     * @returns {PeerConnection}
+     */
+    static getInbound(networkConnection) {
+        const peerConnection = new PeerConnection();
+        peerConnection._networkConnection = networkConnection;
+        return peerConnection;
+    }
+
+    /**
+     * @constructor
+     */
+    constructor() {
+        // Unique id for this connection.
+        /** @type {number} */
+        this._id = PeerConnection._instanceCount++;
+
+        /**
+         * @type {PeerAddress}
+         * @private
+         */
+        this._peerAddress = null;
+
+        // Helper Objects are added during lifecycle
+        /**
+         * @type {NetworkConnection}
+         * @private
+         */
+        this._networkConnection = null;
+ 
+        /**
+         * @type {PeerChannel}
+         * @private
+         */
+        this._peerChannel = null;
+
+        /**
+         * @type {NetworkAgent}
+         * @private
+         */
+        this._networkAgent = null;
+
+        /**
+         * @type {Peer}
+         * @private
+         */
+        this._peer = null;
+
+        // Lifecycle state of connection
+        /**
+         * @type {number}
+         * @private
+         */
+        this._state = PeerConnectionState.NEW;
+
+        /**
+         * @type {number}
+         * @private
+         */
+        this._closingType = null;
+
+        // Latest score given, computed by PeerScorer
+        /**
+         * @type {number}
+         * @private
+         */
+        this._score = null;
+
+        /**
+         * @type {number}
+         * @private
+         */
+        this._establishedSince = null;
+
+        /**
+         * @type {PeerConnectionStatistics}
+         * @private
+         */
+        this._statistics = new PeerConnectionStatistics();
+    }
+
+    /** @type {number} */
+    get state() {
+        return this._state;
+    }
+
+    /** @type {PeerAddress} */
+    get peerAddress() {
+        return this._peerAddress;
+    }
+
+    /** @param {PeerAddress} value */
+    set peerAddress(value) {
+        this._peerAddress = value;
+    }
+
+    /** @type {NetworkConnection} */
+    get networkConnection() {
+        return this._networkConnection;
+    }
+
+    /** @param {NetworkConnection} value */
+    set networkConnection(value) {
+        this._networkConnection = value;
+        this._state = PeerConnectionState.CONNECTED;
+    }
+
+    /** @type {PeerChannel} */
+    get peerChannel() {
+        return this._peerChannel;
+    }
+
+    /** @param {PeerChannel} value */
+    set peerChannel(value) {
+        this._peerChannel = value;
+    }
+
+    /** @type {NetworkAgent} */
+    get networkAgent() {
+        return this._networkAgent;
+    }
+
+    /** @param {NetworkAgent} value */
+    set networkAgent(value) {
+        this._networkAgent = value;
+        this._state = PeerConnectionState.NEGOTIATING;
+    }
+
+    /** @type {Peer} */
+    get peer() {
+        return this._peer;
+    }
+
+    /** @param {Peer} value */
+    set peer(value) {
+        this._peer = value;
+        this._state = PeerConnectionState.ESTABLISHED;
+        this._establishedSince = Date.now();
+
+        // start statistics
+        this._networkAgent.on('ping-pong', (latency) => this._statistics.addLatency(latency));
+        this._peerChannel.on('message-log', (msg) => this._statistics.addMessage(msg));
+    }
+
+    /** @type {number} */
+    get score() {
+        return this._score;
+    }
+
+    /** @param {number} value */
+    set score(value) {
+        this._score = value;
+    }
+
+    /** @type {number} */
+    get establishedSince() {
+        return this._establishedSince;
+    }
+
+    /** @type {number} */
+    get ageEstablished() {
+        return Date.now() - this.establishedSince;
+    }
+
+    /** @type {PeerConnectionStatistics} */
+    get statistics() {
+        return this._statistics;
+    }
+}
+// Used to generate unique PeerConnection ids.
+PeerConnection._instanceCount = 0;
+Class.register(PeerConnection);
+
+class PeerConnectionState {
+}
+PeerConnectionState.NEW = 1;
+PeerConnectionState.CONNECTING = 2;
+PeerConnectionState.CONNECTED = 3;
+PeerConnectionState.NEGOTIATING = 4;
+PeerConnectionState.ESTABLISHED = 5;
+Class.register(PeerConnectionState);
+
+class SignalProcessor {
+    /**
+     * @constructor
+     * @param {PeerAddressBook} peerAddresses
+     * @param {NetworkConfig} networkConfig
+     * @param {WebRtcConnector} rtcConnector
+     */
+    constructor(peerAddresses, networkConfig, rtcConnector) {
+        /**
+         * @type {PeerAddressBook}
+         * @private
+         */
+        this._addresses = peerAddresses;
+
+        /**
+         * @type {NetworkConfig}
+         * @private
+         */
+        this._networkConfig = networkConfig;
+
+        /**
+         * @type {WebRtcConnector}
+         * @private
+         */
+        this._rtcConnector = rtcConnector;
+
+        /**
+         * @type {SignalStore}
+         * @private
+         */
+        this._forwards = new SignalStore();
+    }
+
+    /**
+     * @param {PeerChannel} channel
+     * @param {SignalMessage} msg
+     * @returns {void}
+     */
+    onSignal(channel, msg) {
+        // Discard signals with invalid TTL.
+        if (msg.ttl > Network.SIGNAL_TTL_INITIAL) {
+            channel.close(CloseType.INVALID_SIGNAL_TTL, 'invalid signal ttl');
+            return;
+        }
+
+        // Discard signals that have a payload, which is not properly signed.
+        if (msg.hasPayload() && !msg.verifySignature()) {
+            channel.close(CloseType.INVALID_SIGNATURE, 'invalid signature');
+            return;
+        }
+
+        // Can be undefined for non-rtc nodes.
+        const myPeerId = this._networkConfig.peerAddress.peerId;
+
+        // Discard signals from myself.
+        if (msg.senderId.equals(myPeerId)) {
+            Log.w(SignalProcessor, `Received signal from myself to ${msg.recipientId} from ${channel.peerAddress} (myId: ${myPeerId})`);
+            return;
+        }
+
+        // If the signal has the unroutable flag set and we previously forwarded a matching signal,
+        // mark the route as unusable.
+        if (msg.isUnroutable() && this._forwards.signalForwarded(/*senderId*/ msg.recipientId, /*recipientId*/ msg.senderId, /*nonce*/ msg.nonce)) {
+            const senderAddr = this._addresses.getByPeerId(msg.senderId);
+            this._addresses.unroutable(channel, senderAddr);
+        }
+
+        // If the signal is intended for us, pass it on to our WebRTC connector.
+        if (msg.recipientId.equals(myPeerId)) {
+            // If we sent out a signal that did not reach the recipient because of TTL
+            // or it was unroutable, delete this route.
+            if (this._rtcConnector.isValidSignal(msg) && (msg.isUnroutable() || msg.isTtlExceeded())) {
+                const senderAddr = this._addresses.getByPeerId(msg.senderId);
+                this._addresses.unroutable(channel, senderAddr);
+            }
+            this._rtcConnector.onSignal(channel, msg);
+            return;
+        }
+
+        // Discard signals that have reached their TTL.
+        if (msg.ttl <= 0) {
+            Log.d(SignalProcessor, `Discarding signal from ${msg.senderId} to ${msg.recipientId} - TTL reached`);
+            // Send signal containing TTL_EXCEEDED flag back in reverse direction.
+            if (msg.flags === 0) {
+                channel.signal(/*senderId*/ msg.recipientId, /*recipientId*/ msg.senderId, msg.nonce, Network.SIGNAL_TTL_INITIAL, SignalMessage.Flag.TTL_EXCEEDED);
+            }
+            return;
+        }
+
+        // Otherwise, try to forward the signal to the intended recipient.
+        const signalChannel = this._addresses.getChannelByPeerId(msg.recipientId);
+        if (!signalChannel) {
+            Log.d(SignalProcessor, `Failed to forward signal from ${msg.senderId} to ${msg.recipientId} - no route found`);
+            // If we don't know a route to the intended recipient, return signal to sender with unroutable flag set and payload removed.
+            // Only do this if the signal is not already a unroutable response.
+            if (msg.flags === 0) {
+                channel.signal(/*senderId*/ msg.recipientId, /*recipientId*/ msg.senderId, msg.nonce, Network.SIGNAL_TTL_INITIAL, SignalMessage.Flag.UNROUTABLE);
+            }
+            return;
+        }
+
+        // Discard signal if our shortest route to the target is via the sending peer.
+        // XXX Why does this happen?
+        if (signalChannel.peerAddress.equals(channel.peerAddress)) {
+            Log.w(SignalProcessor, `Discarding signal from ${msg.senderId} to ${msg.recipientId} - shortest route via sending peer`);
+            // If our best route is via the sending peer, return signal to sender with unroutable flag set and payload removed.
+            // Only do this if the signal is not already a unroutable response.
+            if (msg.flags === 0) {
+                channel.signal(/*senderId*/ msg.recipientId, /*recipientId*/ msg.senderId, msg.nonce, Network.SIGNAL_TTL_INITIAL, SignalMessage.Flag.UNROUTABLE);
+            }
+            return;
+        }
+
+        // Decrement ttl and forward signal.
+        signalChannel.signal(msg.senderId, msg.recipientId, msg.nonce, msg.ttl - 1, msg.flags, msg.payload, msg.senderPubKey, msg.signature);
+
+        // We store forwarded messages if there are no special flags set.
+        if (msg.flags === 0) {
+            this._forwards.add(msg.senderId, msg.recipientId, msg.nonce);
+        }
+
+        // XXX This is very spammy!!!
+        // Log.v(Network, `Forwarding signal (ttl=${msg.ttl}) from ${msg.senderId} `
+        //     + `(received from ${channel.peerAddress}) to ${msg.recipientId} `
+        //     + `(via ${signalChannel.peerAddress})`);
+    }
+}
+Class.register(SignalProcessor);
+
+class SignalStore {
+    /**
+     * @param {number} maxSize maximum number of entries
+     */
+    constructor(maxSize = 1000) {
+        /** @type {number} */
+        this._maxSize = maxSize;
+        /** @type {Queue.<ForwardedSignal>} */
+        this._queue = new Queue();
+        /** @type {HashMap.<ForwardedSignal, number>} */
+        this._store = new HashMap();
+    }
+
+    /** @type {number} */
+    get length() {
+        return this._queue.length;
+    }
+
+    /**
+     * @param {PeerId} senderId
+     * @param {PeerId} recipientId
+     * @param {number} nonce
+     */
+    add(senderId, recipientId, nonce) {
+        // If we already forwarded such a message, just update timestamp.
+        if (this.contains(senderId, recipientId, nonce)) {
+            const signal = new ForwardedSignal(senderId, recipientId, nonce);
+            this._store.put(signal, Date.now());
+            this._queue.remove(signal);
+            this._queue.enqueue(signal);
+            return;
+        }
+
+        // Delete oldest if needed.
+        if (this.length >= this._maxSize) {
+            const oldest = this._queue.dequeue();
+            this._store.remove(oldest);
+        }
+        const signal = new ForwardedSignal(senderId, recipientId, nonce);
+        this._queue.enqueue(signal);
+        this._store.put(signal, Date.now());
+    }
+
+    /**
+     * @param {PeerId} senderId
+     * @param {PeerId} recipientId
+     * @param {number} nonce
+     * @return {boolean}
+     */
+    contains(senderId, recipientId, nonce) {
+        const signal = new ForwardedSignal(senderId, recipientId, nonce);
+        return this._store.contains(signal);
+    }
+
+    /**
+     * @param {PeerId} senderId
+     * @param {PeerId} recipientId
+     * @param {number} nonce
+     * @return {boolean}
+     */
+    signalForwarded(senderId, recipientId, nonce) {
+        const signal = new ForwardedSignal(senderId, recipientId, nonce);
+        const lastSeen = this._store.get(signal);
+        if (!lastSeen) {
+            return false;
+        }
+        const valid = lastSeen + ForwardedSignal.SIGNAL_MAX_AGE > Date.now();
+        if (!valid) {
+            // Because of the ordering, we know that everything after that is invalid too.
+            const toDelete = this._queue.dequeueUntil(signal);
+            for (const dSignal of toDelete) {
+                this._store.remove(dSignal);
+            }
+        }
+        return valid;
+    }
+}
+SignalStore.SIGNAL_MAX_AGE = 10 /* seconds */;
+Class.register(SignalStore);
+
+class ForwardedSignal {
+    /**
+     * @param {PeerId} senderId
+     * @param {PeerId} recipientId
+     * @param {number} nonce
+     */
+    constructor(senderId, recipientId, nonce) {
+        /** @type {PeerId} */
+        this._senderId = senderId;
+        /** @type {PeerId} */
+        this._recipientId = recipientId;
+        /** @type {number} */
+        this._nonce = nonce;
+    }
+
+    /**
+     * @param {ForwardedSignal} o
+     * @returns {boolean}
+     */
+    equals(o) {
+        return o instanceof ForwardedSignal
+            && this._senderId.equals(o._senderId)
+            && this._recipientId.equals(o._recipientId)
+            && this._nonce === o._nonce;
+    }
+
+    hashCode() {
+        return this.toString();
+    }
+
+    /**
+     * @returns {string}
+     */
+    toString() {
+        return `ForwardedSignal{senderId=${this._senderId}, recipientId=${this._recipientId}, nonce=${this._nonce}}`;
+    }
+}
+Class.register(ForwardedSignal);
+
+class ConnectionPool extends Observable {
+    /**
+     * @constructor
+     * @param {PeerAddressBook} peerAddresses
+     * @param {NetworkConfig} networkConfig
+     * @param {IBlockchain} blockchain
+     * @param {Time} time
+     * @listens WebSocketConnector#connection
+     * @listens WebSocketConnector#error
+     * @listens WebRtcConnector#connection
+     * @listens WebRtcConnector#error
+     */
+    constructor(peerAddresses, networkConfig, blockchain, time) {
+        super();
+
+        /**
+         * @type {PeerAddressBook}
+         * @private
+         */
+        this._addresses = peerAddresses;
+
+        /**
+         * @type {NetworkConfig}
+         * @private
+         */
+        this._networkConfig = networkConfig;
+
+        /**
+         * @type {IBlockchain}
+         * @private
+         */
+        this._blockchain = blockchain;
+
+        /**
+         * @type {Time}
+         * @private
+         */
+        this._time = time;
+
+        /**
+         * HashMap from peerAddresses to connections.
+         * @type {HashMap.<PeerAddress, PeerConnection>}
+         * @private
+         */
+        this._connectionsByPeerAddress = new HashMap();
+        
+        /**
+         * HashMap from netAddresses to connections.
+         * @type {HashMap.<NetAddress, Array<PeerConnection>>}
+         * @private
+         */
+        this._connectionsByNetAddress = new HashMap();
+
+        // Total bytes sent/received on past connections.
+        /** @type {number} */
+        this._bytesSent = 0;
+        /** @type {number} */
+        this._bytesReceived = 0;
+
+        /** @type {WebSocketConnector} */
+        this._wsConnector = new WebSocketConnector(this._networkConfig);
+        this._wsConnector.on('connection', conn => this._onConnection(conn));
+        this._wsConnector.on('error', (peerAddr, e) => this._onConnectError(peerAddr, e));
+
+        /** @type {WebRtcConnector} */
+        this._rtcConnector = new WebRtcConnector(this._networkConfig);
+        this._rtcConnector.on('connection', conn => this._onConnection(conn));
+        this._rtcConnector.on('error', (peerAddr, reason) => this._onConnectError(peerAddr, reason));
+
+        // Number of WebSocket/WebRTC connections.
+        /** @type {number} */
+        this._peerCountWs = 0;
+        /** @type {number} */
+        this._peerCountRtc = 0;
+        /** @type {number} */
+        this._peerCountDumb = 0;
+        /** @type {number} */
+        this._peerCountFull = 0;
+        /** @type {number} */
+        this._peerCountLight = 0;
+        /** @type {number} */
+        this._peerCountNano = 0;
+
+        /**
+         * Number of ongoing outbound connection attempts.
+         * @type {number}
+         * @private
+         */
+        this._connectingCount = 0;
+
+        /**
+         * Number of not established inbound connections.
+         * @type {number}
+         * @private
+         */
+        this._inboundCount = 0;
+
+        /** @type {SignalProcessor} */
+        this._signalProcessor = new SignalProcessor(peerAddresses, networkConfig, this._rtcConnector);
+
+        // When true, send a signal to network to close an established connection for a incoming one
+        /** @type {boolean} */
+        this._allowInboundExchange = false;
+    }
+
+    /**
+     * @returns {Array<PeerConnection>}
+     */
+    values() {
+        return Array.from(this._connectionsByPeerAddress.values());
+    }
+
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @returns {PeerConnection|null}
+     */
+    getConnectionByPeerAddress(peerAddress) {
+        return this._connectionsByPeerAddress.get(peerAddress);
+    }
+
+    /**
+     * @param {NetAddress} netAddress
+     * @returns {Array<PeerConnection>}
+     */
+    getConnectionsByNetAddress(netAddress) {
+        return this._connectionsByNetAddress.get(netAddress) || [];
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @returns {boolean}
+     */
+    isEstablished(peerAddress) {
+        const peerAddressState = this.getConnectionByPeerAddress(peerAddress);
+        return peerAddressState && peerAddressState.state === PeerConnectionState.ESTABLISHED;
+    }
+
+    /**
+     * @param {PeerConnection} peerConnection
+     * @returns {void}
+     * @private
+     */
+    _add(peerConnection) {
+        if (peerConnection.peerAddress) {
+            this._connectionsByPeerAddress.put(peerConnection.peerAddress, peerConnection);
+        }
+    }
+
+    /**
+     * @param {PeerConnection} peerConnection
+     * @returns {void}
+     * @private
+     */
+    _remove(peerConnection) {
+        if (peerConnection.peerAddress) {
+            this._connectionsByPeerAddress.remove(peerConnection.peerAddress);
+        }
+
+        if (peerConnection.networkConnection && peerConnection.networkConnection.netAddress) {
+            this._removeNetAddress(peerConnection, peerConnection.networkConnection.netAddress);
+        }
+    }
+
+    /**
+     * @param {PeerConnection} peerConnection
+     * @param {NetAddress} netAddress
+     * @returns {void}
+     * @private
+     */
+    _addNetAddress(peerConnection, netAddress) {
+        if (this._connectionsByNetAddress.contains(netAddress)) {
+            this._connectionsByNetAddress.get(netAddress).push(peerConnection);
+        } else {
+            this._connectionsByNetAddress.put(netAddress, [peerConnection]);
+        }
+    }
+
+    /**
+     * @param {PeerConnection} peerConnection
+     * @param {NetAddress} netAddress
+     * @returns {void}
+     * @private
+     */
+    _removeNetAddress(peerConnection, netAddress) {
+        if (this._connectionsByNetAddress.contains(netAddress)) {
+            const peerConnections = this._connectionsByNetAddress.get(netAddress);
+
+            const index = peerConnections.indexOf(peerConnection);
+            if (index >= 0) {
+                peerConnections.splice(index, 1);
+            }
+
+            if (peerConnections.length === 0) {
+                this._connectionsByNetAddress.remove(netAddress);
+            }
+        }
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @returns {boolean}
+     */
+    _hasPriority(peerAddress) {
+        return this.peerCountFull === 0 && Services.isFullNode(peerAddress.services);
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @returns {boolean}
+     */
+    _checkOutboundConnectionRequest(peerAddress) {
+        if (peerAddress === null) {
+            return false;
+        }
+
+        if (peerAddress.protocol !== Protocol.WS && peerAddress.protocol !== Protocol.RTC) {
+            Log.e(Network, 'Cannot connect to {$this.peerAddress} - unsupported protocol');
+            return false;
+        }
+
+        if (this._addresses.isBanned(peerAddress)){
+            Log.e(Network, `Connecting to banned address ${peerAddress}`);
+            return false;
+        }
+
+        const peerConnection = this.getConnectionByPeerAddress(peerAddress);
+        if (peerConnection) {
+            Log.e(Network, `Duplicate connection to ${peerAddress}`);
+            return false;
+        }
+
+        // Forbid connection if we have too many connections to the peer's IP address.
+        if (peerAddress.netAddress && !peerAddress.netAddress.isPseudo()) {
+            if (this.getConnectionsByNetAddress(peerAddress.netAddress).length > Network.PEER_COUNT_PER_IP_MAX) {
+                Log.e(ConnectionPool, `connection limit per ip (${Network.PEER_COUNT_PER_IP_MAX}) reached`);
+                return false;
+            }
+        }
+
+        // Reject peer if we have reached max peer count.
+        if (this.peerCount >= Network.PEER_COUNT_MAX && !this._hasPriority(peerAddress)) {
+            Log.e(ConnectionPool, `max peer count reached (${Network.PEER_COUNT_MAX})`);
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param {NetworkConnection} conn
+     * @returns {boolean}
+     * @private
+     */
+    _checkConnection(conn) {
+        // Close connection if we have too many connections to the peer's IP address.
+        if (conn.netAddress && !conn.netAddress.isPseudo()) {
+            if (this.getConnectionsByNetAddress(conn.netAddress).length >= Network.PEER_COUNT_PER_IP_MAX) {
+                conn.close(CloseType.CONNECTION_LIMIT_PER_IP, `connection limit per ip (${Network.PEER_COUNT_PER_IP_MAX}) reached`);
+                return false;
+            }
+        }
+
+        // Reject peer if we have reached max peer count.
+        if (this.peerCount >= Network.PEER_COUNT_MAX
+            && !(conn.outbound && this._hasPriority(conn.peerAddress))
+            && !(conn.inbound && this._allowInboundExchange)) {
+
+            conn.close(CloseType.MAX_PEER_COUNT_REACHED, `max peer count reached (${Network.PEER_COUNT_MAX})`);
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param {PeerConnection} peerConnection
+     * @param {Peer} peer
+     * @returns {boolean}
+     * @private
+     */
+    _checkHandshake(peerConnection, peer) {
+        // Close connection if we are already connected to this peer.
+        if (this.isEstablished(peer.peerAddress)) {
+            peerConnection.peerChannel.close(CloseType.DUPLICATE_CONNECTION, `Duplicate connection to ${peer.peerAddress} (post-handshake)` );
+            return false;
+        }
+
+        // Close connection if this peer is banned.
+        if (this._addresses.isBanned(peer.peerAddress)) {
+            peerConnection.peerChannel.close(CloseType.PEER_IS_BANNED, `Connection with banned address ${peer.peerAddress} (post-handshake)`);
+            return false;
+        }
+
+        // Close connection if we have too many connections to the peer's IP address.
+        if (peer.netAddress && !peer.netAddress.isPseudo()) {
+            if (this.getConnectionsByNetAddress(peer.netAddress).length > Network.PEER_COUNT_PER_IP_MAX) {
+                peerConnection.peerChannel.close(CloseType.CONNECTION_LIMIT_PER_IP, `connection limit per ip (${Network.PEER_COUNT_PER_IP_MAX}) reached (post-handshake)`);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @returns {boolean}
+     */
+    connectOutbound(peerAddress) {
+        // all checks in one step
+        if (!this._checkOutboundConnectionRequest(peerAddress)){
+            return false;
+        }
+
+        // Connection request accepted.
+
+        // create fresh PeerConnection instance
+        const peerConnection = PeerConnection.getOutbound(peerAddress);
+        this._add(peerConnection);
+
+        // choose connector type and call
+        let connecting = false;
+        if (peerAddress.protocol === Protocol.WS) {
+            connecting = this._wsConnector.connect(peerAddress);
+        } else {
+            const signalChannel = this._addresses.getChannelByPeerId(peerAddress.peerId);
+            connecting = this._rtcConnector.connect(peerAddress, signalChannel);
+        }
+
+        if (connecting) {
+            this._connectingCount++;
+        } else {
+            this._remove(peerConnection);
+            Log.d(Network, `Outbound attempt not connecting: ${peerAddress}`);
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @listens PeerChannel#signal
+     * @listens NetworkAgent#handshake
+     * @listens NetworkAgent#close
+     * @fires ConnectionPool#connection
+     * @param {NetworkConnection} conn
+     * @returns {void}
+     * @private
+     */
+    _onConnection(conn) {
+        let peerConnection;
+        if (conn.outbound) {
+            this._connectingCount--;
+
+            peerConnection = this.getConnectionByPeerAddress(conn.peerAddress);
+
+            Assert.that(peerConnection, `Connecting to outbound peer address not stored ${conn.peerAddress}`);
+            Assert.that(peerConnection.state === PeerConnectionState.CONNECTING,
+                `PeerConnection state not CONNECTING ${conn.peerAddress}`);
+        } else {
+            peerConnection = PeerConnection.getInbound(conn);
+            this._inboundCount++;
+        }
+
+        // Set peerConnection to CONNECTED state.
+        peerConnection.networkConnection = conn;
+
+        // Register close listener early to clean up correctly in case _checkConnection() closes the connection.
+        conn.on('close', (type, reason) => this._onClose(peerConnection, type, reason));
+
+        if (!this._checkConnection(conn)) {
+            return;
+        }
+
+        // Connection accepted.
+
+        if (conn.netAddress && !conn.netAddress.isPseudo()) {
+            this._addNetAddress(peerConnection, conn.netAddress);
+        }
+
+        const connType = conn.inbound ? 'inbound' : 'outbound';
+        Log.d(ConnectionPool, `Connection established (${connType}) #${conn.id} ${conn.netAddress || conn.peerAddress || '<pending>'}`);
+
+        // Let listeners know about this connection.
+        this.fire('connection', conn);
+
+        // Create peer channel.
+        const channel = new PeerChannel(conn);
+        channel.on('signal', msg => this._signalProcessor.onSignal(channel, msg));
+ 
+        peerConnection.peerChannel = channel;
+
+        // Create network agent.
+        const agent = new NetworkAgent(this._blockchain, this._addresses, this._networkConfig, channel);
+        agent.on('version', peer => this._checkHandshake(peerConnection, peer));
+        agent.on('handshake', peer => this._onHandshake(peerConnection, peer));
+
+        // Set peerConnection to NEGOTIATING state.
+        peerConnection.networkAgent = agent;
+
+        // Initiate handshake with the peer.
+        agent.handshake();
+    }
+
+    /**
+     * Handshake with this peer was successful.
+     * @fires ConnectionPool#peer-joined
+     * @fires ConnectionPool#peers-changed
+     * @fires ConnectionPool#recyling-request
+     * @param {PeerConnection} peerConnection
+     * @param {Peer} peer
+     * @returns {void}
+     * @private
+     */
+    _onHandshake(peerConnection, peer) {
+        // Handshake accepted.
+
+        // Check if we need to recycle a connection.
+        if (this.peerCount >= Network.PEER_COUNT_MAX) {
+            this.fire('recycling-request');
+        }
+
+        if (peerConnection.networkConnection.inbound) {
+            peerConnection.peerAddress = peer.peerAddress;
+            this._add(peerConnection);
+            this._inboundCount--;
+        }
+
+        // Set peerConnection to ESTABLISHED state.
+        peerConnection.peer = peer;
+
+        if (peer.netAddress && !peer.netAddress.isPseudo() && this.getConnectionsByNetAddress(peer.netAddress).indexOf(peerConnection) < 0) {
+            this._addNetAddress(peerConnection, peer.netAddress);
+        }
+ 
+        this._updateConnectedPeerCount(peer.peerAddress, 1);
+
+        this._addresses.established(peer.channel, peer.peerAddress);
+
+        // Let listeners know about this peer.
+        this.fire('peer-joined', peer);
+
+        // Let listeners know that the peers changed.
+        this.fire('peers-changed');
+
+        Log.d(ConnectionPool, () => `[PEER-JOINED] ${peer.peerAddress} ${peer.netAddress} (version=${peer.version}, services=${peer.peerAddress.services}, headHash=${peer.headHash.toBase64()})`);
+    }
+
+    /**
+     * This peer channel was closed.
+     * @param {PeerConnection} peerConnection
+     * @param {number} type
+     * @param {string} reason
+     * @fires ConnectionPool#peer-left
+     * @fires ConnectionPool#peers-changed
+     * @fires ConnectionPool#close
+     * @returns {void}
+     * @private
+     */
+    _onClose(peerConnection, type, reason) {
+        // Update total bytes sent/received.
+        this._bytesSent += peerConnection.networkConnection.bytesSent;
+        this._bytesReceived +=  peerConnection.networkConnection.bytesReceived;
+
+        if (peerConnection.peerAddress) {
+            this._addresses.close(peerConnection.peerChannel, peerConnection.peerAddress, type);
+        }
+
+        this._remove(peerConnection);
+
+        // Check if the handshake with this peer has completed.
+        if (peerConnection.state === PeerConnectionState.ESTABLISHED) {
+            this._updateConnectedPeerCount(peerConnection.peerAddress, -1);
+
+            // Tell listeners that this peer has gone away.
+            this.fire('peer-left', peerConnection.peer);
+
+            // Let listeners know that the peers changed.
+            this.fire('peers-changed');
+
+            const kbTransferred = ((peerConnection.networkConnection.bytesSent
+                + peerConnection.networkConnection.bytesReceived) / 1000).toFixed(2);
+            Log.d(ConnectionPool, `[PEER-LEFT] ${peerConnection.peerAddress} ${peerConnection.peer.netAddress} `
+                + `(version=${peerConnection.peer.version}, transferred=${kbTransferred} kB, closingType=${type} ${reason})`);
+        } else {
+            if (peerConnection.networkConnection.inbound) {
+                this._inboundCount--;
+                Log.w(ConnectionPool, `Inbound connection closed pre-handshake: ${reason} (${type})`);
+            } else {
+                Log.w(ConnectionPool, `Connection to ${peerConnection.peerAddress} closed pre-handshake: ${reason} (${type})`);
+                this.fire('connect-error', peerConnection.peerAddress, `${reason} (${type})`);
+            }
+        }
+
+        // Let listeners know about this closing.
+        this.fire('close', peerConnection, type, reason);
+    }
+
+    /**
+     * Connection to this peer address failed.
+     * @param {PeerAddress} peerAddress
+     * @param {string|*} [reason]
+     * @fires ConnectionPool#connect-error
+     * @returns {void}
+     * @private
+     */
+    _onConnectError(peerAddress, reason) {
+        Log.w(ConnectionPool, `Connection to ${peerAddress} failed` + (typeof reason === 'string' ? ` - ${reason}` : ''));
+
+        const peerConnection = this.getConnectionByPeerAddress(peerAddress);
+        Assert.that(peerConnection && peerConnection.state === PeerConnectionState.CONNECTING);
+        this._remove(peerConnection);
+
+        this._connectingCount--;
+
+        this._addresses.close(null, peerAddress, CloseType.CONNECTION_FAILED);
+
+        this.fire('connect-error', peerAddress, reason);
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @param {number} delta
+     * @returns {void}
+     * @private
+     */
+    _updateConnectedPeerCount(peerAddress, delta) {
+        switch (peerAddress.protocol) {
+            case Protocol.WS:
+                this._peerCountWs += delta;
+                break;
+            case Protocol.RTC:
+                this._peerCountRtc += delta;
+                break;
+            case Protocol.DUMB:
+                this._peerCountDumb += delta;
+                break;
+            default:
+                Log.w(PeerAddressBook, `Unknown protocol ${peerAddress.protocol}`);
+        }
+
+        if (Services.isFullNode(peerAddress.services)) {
+            this._peerCountFull += delta;
+        } else if (Services.isLightNode(peerAddress.services)) {
+            this._peerCountLight += delta;
+        } else {
+            this._peerCountNano += delta;
+        }
+    }
+
+
+    /**
+     * @param {string|*} reason
+     * @returns {void}
+     */
+    disconnect(reason) {
+        // Close all active connections.
+        for (const connection of this.values()) {
+            if (connection.peerChannel) {
+                connection.peerChannel.close(CloseType.MANUAL_NETWORK_DISCONNECT, reason || 'manual network disconnect');
+            }
+        }
+    }
+
+    // XXX For testing
+    disconnectWebSocket() {
+        // Close all websocket connections.
+        for (const connection of this.values()) {
+            if (connection.peerChannel && connection.peerAddress && connection.peerAddress.protocol === Protocol.WS) {
+                connection.channel.close(CloseType.MANUAL_WEBSOCKET_DISCONNECT, 'manual websocket disconnect');
+            }
+        }
+    }
+
+
+    /** @type {number} */
+    get peerCountWs() {
+        return this._peerCountWs;
+    }
+
+    /** @type {number} */
+    get peerCountRtc() {
+        return this._peerCountRtc;
+    }
+
+    /** @type {number} */
+    get peerCountDumb() {
+        return this._peerCountDumb;
+    }
+
+    /** @type {number} */
+    get peerCount() {
+        return this._peerCountWs + this._peerCountRtc + this._peerCountDumb;
+    }
+
+    /** @type {number} */
+    get peerCountFull() {
+        return this._peerCountFull;
+    }
+
+    /** @type {number} */
+    get peerCountLight() {
+        return this._peerCountLight;
+    }
+
+    /** @type {number} */
+    get peerCountNano() {
+        return this._peerCountNano;
+    }
+
+    /** @type {number} */
+    get connectingCount() {
+        return this._connectingCount;
+    }
+
+    /** @type {number} */
+    get count() {
+        return this._connectionsByPeerAddress.length + this._inboundCount;
+    }
+
+    /** @type {number} */
+    get bytesSent() {
+        return this._bytesSent
+            + this.values().reduce((n, peerConnection) => n + (peerConnection.networkConnection ? peerConnection.networkConnection.bytesSent : 0), 0);
+    }
+
+    /** @type {number} */
+    get bytesReceived() {
+        return this._bytesReceived
+            + this.values().reduce((n, peerConnection) => n + (peerConnection.networkConnection ? peerConnection.networkConnection.bytesReceived : 0), 0);
+    }
+
+    /** @param {boolean} value */
+    set allowInboundExchange(value) {
+        this._allowInboundExchange = value;
+    }
+
+}
+Class.register(ConnectionPool);
+
+class PeerScorer extends Observable {
+    /**
+     * @constructor
+     * @param {NetworkConfig} networkConfig
+     * @param {PeerAddressBook} addresses
+     * @param {ConnectionPool} connections
+     */
+    constructor(networkConfig, addresses, connections) {
+        super();
+
+        /**
+         * @type {NetworkConfig}
+         * @private
+         */
+        this._networkConfig = networkConfig;
+
+        /**
+         * @type {PeerAddressBook}
+         * @private
+         */
+        this._addresses = addresses;
+
+        /**
+         * @type {ConnectionPool}
+         * @private
+         */
+        this._connections = connections;
+
+        /**
+         * @type {Array<PeerConnection>}
+         * @private
+         */
+        this._connectionScores = null;
+    }
+
+    /**
+     * @returns {?PeerAddress}
+     */
+    pickAddress() {
+        const addresses = this._addresses.values();
+        const numAddresses = addresses.length;
+
+        // Pick a random start index.
+        const index = Math.floor(Math.random() * numAddresses);
+
+        // Score up to 1000 addresses starting from the start index and pick the
+        // one with the highest score. Never pick addresses with score < 0.
+        const minCandidates = Math.min(numAddresses, 1000);
+        const candidates = new HashMap();
+        for (let i = 0; i < numAddresses; i++) {
+            const idx = (index + i) % numAddresses;
+            const address = addresses[idx];
+            const score = this._scoreAddress(address);
+            if (score >= 0) {
+                candidates.put(score, address);
+                if (candidates.length >= minCandidates) {
+                    break;
+                }
+            }
+        }
+
+        if (candidates.length === 0) {
+            return null;
+        }
+
+        // Return the candidate with the highest score.
+        const scores = candidates.keys().sort((a, b) => b - a);
+        const winner = candidates.get(scores[0]);
+        return winner.peerAddress;
+    }
+
+    /**
+     * @param {PeerAddressState} peerAddressState
+     * @returns {number}
+     * @private
+     */
+    _scoreAddress(peerAddressState) {
+        const peerAddress = peerAddressState.peerAddress;
+
+        // Filter addresses that we cannot connect to.
+        if (!this._networkConfig.canConnect(peerAddress.protocol)) {
+            return -1;
+        }
+
+        // Filter addresses that are too old.
+        if (peerAddress.exceedsAge()) {
+            return -1;
+        }
+
+        // a channel to that peer address is CONNECTING, CONNECTED, NEGOTIATING OR ESTABLISHED
+        if (this._connections.getConnectionByPeerAddress(peerAddress)) {
+            return -1;
+        }
+
+        // Filter addresses that are too old.
+        if (peerAddress.exceedsAge()) {
+            return -1;
+        }
+
+        // (protocol + services) * age
+        const score = (this._scoreProtocol(peerAddress) + this._scoreServices(peerAddress))
+            * ((peerAddress.timestamp / 1000) + 1);
+
+        switch (peerAddressState.state) {
+            case PeerAddressState.BANNED:
+                return -1;
+
+            case PeerAddressState.NEW:
+            case PeerAddressState.TRIED:
+                return score;
+
+            case PeerAddressState.FAILED:
+                // Don't pick failed addresses when they have failed the maximum number of times.
+                return (1 - ((peerAddressState.failedAttempts + 1) / peerAddressState.maxFailedAttempts)) * score;
+
+            default:
+                return -1;
+        }
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @returns {number}
+     * @private
+     */
+    _scoreProtocol(peerAddress) {
+        let score = 1;
+
+        // We want at least two websocket connection
+        if (this._connections.peerCountWs < 2) {
+            score *= peerAddress.protocol === Protocol.WS ? 3 : 1;
+        } else {
+            score *= peerAddress.protocol === Protocol.RTC ? 3 : 1;
+        }
+
+        // Prefer WebRTC addresses with lower distance:
+        //  distance = 0: self
+        //  distance = 1: direct connection
+        //  distance = 2: 1 hop
+        //  ...
+        // We only expect distance >= 2 here.
+        if (peerAddress.protocol === Protocol.RTC) {
+            score *= 1 + ((PeerAddressBook.MAX_DISTANCE - peerAddress.distance) / 2);
+        }
+
+        return score;
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @returns {number}
+     * @private
+     */
+    _scoreServices(peerAddress) {
+        if (this._connections.peerCount > 2 && this._connections.peerCountFull === 0 && Services.isFullNode(peerAddress.services)) {
+            return 10;
+        }
+        return 0;
+    }
+
+    /**
+     * @returns {void}
+     */
+    scoreConnections() {
+        const candidates = [];
+
+        for (const peerConnection of this._connections.values()) {
+            if (peerConnection.state === PeerConnectionState.ESTABLISHED) {
+                // Grant new connections a grace period from recycling.
+                if (peerConnection.ageEstablished > PeerScorer._getMinAge(peerConnection.peerAddress)) {
+                    peerConnection.score = this._scoreConnection(peerConnection);
+                    candidates.push(peerConnection);
+                }
+
+                peerConnection.statistics.reset();
+            }
+        }
+
+        // sort by score
+        this._connectionScores = candidates.sort((a, b) => b.score - a.score);
+    }
+
+    /**
+     * @param {number} count
+     * @param {number} type
+     * @param {string} reason
+     * @returns {void}
+     */
+    recycleConnections(count, type, reason) {
+        if (!this._connectionScores) {
+            return;
+        }
+
+        while (count > 0 && this._connectionScores.length > 0) {
+            const peerConnection = this._connectionScores.pop();
+            if (peerConnection.state === PeerConnectionState.ESTABLISHED) {
+                peerConnection.peerChannel.close(type, `${reason}`);
+                count--;
+            }
+        }
+    }
+
+    /**
+     * @param {PeerConnection} peerConnection
+     * @returns {number}
+     * @private
+     */
+    _scoreConnection(peerConnection) {
+        const scoreAge = this._scoreConnectionAge(peerConnection);
+
+        // Connection type
+        const scoreType = peerConnection.networkConnection.inbound ? 0 : 1;
+
+        // Protocol, when low on Websocket connections, give it some aid
+        const distribution = this._connections.peerCountWs / this._connections.peerCount;
+        let scoreProtocol = 0;
+        if (distribution < PeerScorer.BEST_PROTOCOL_WS_DISTRIBUTION) {
+            if (peerConnection.peerAddress.protocol === Protocol.WS) {
+                scoreProtocol = 1;
+            }
+        }
+
+        // Connection speed, based on ping-pong latency median
+        const medianDelay = peerConnection.statistics.latencyMedian;
+        let scoreSpeed = 0;
+        if (medianDelay > 0 && medianDelay < NetworkAgent.PING_TIMEOUT) {
+            scoreSpeed = 1 - medianDelay / NetworkAgent.PING_TIMEOUT;
+        }
+
+        return 0.4 * scoreAge + 0.2 * scoreType + 0.2 * scoreProtocol + 0.2 * scoreSpeed;
+    }
+
+    /**
+     * @param {PeerConnection} peerConnection
+     * @returns {number}
+     * @private
+     */
+    _scoreConnectionAge(peerConnection) {
+        const score = (age, bestAge, maxAge) => Math.max(Math.min(1 - (age - bestAge) / maxAge, 1), 0);
+
+        const age = peerConnection.ageEstablished;
+        const services = peerConnection.peerAddress.services;
+        if (Services.isFullNode(services)) {
+            return age / (2 * PeerScorer.BEST_AGE_FULL) + 0.5;
+        } else if (Services.isLightNode(services)) {
+            return score(age, PeerScorer.BEST_AGE_LIGHT, PeerScorer.MAX_AGE_LIGHT);
+        } else {
+            return score(age, PeerScorer.BEST_AGE_NANO, PeerScorer.MAX_AGE_NANO);
+        }
+    }
+
+    /**
+     * @param {PeerAddress} peerAddress
+     * @returns {number}
+     * @private
+     */
+    static _getMinAge(peerAddress) {
+        if (Services.isFullNode(peerAddress.services)) {
+            return PeerScorer.MIN_AGE_FULL;
+        } else if (Services.isLightNode(peerAddress.services)) {
+            return PeerScorer.MIN_AGE_LIGHT;
+        } else {
+            return PeerScorer.MIN_AGE_NANO;
+        }
+    }
+
+    /** @type {Array.<PeerConnection>|null} */
+    get connectionScores() {
+        return this._connectionScores;
+    }
+
+    /** @type {number|null} */
+    get lowestConnectionScore() {
+        return this._connectionScores && this._connectionScores.length > 0
+            ? this._connectionScores[this._connectionScores.length - 1].score
+            : null;
+    }
+}
+PeerScorer.MIN_AGE_FULL = 5 * 60 * 1000; // 5 minutes
+PeerScorer.BEST_AGE_FULL = 24 * 60 * 60 * 1000; // 24 hours
+
+PeerScorer.MIN_AGE_LIGHT = 2 * 60 * 1000; // 2 minutes
+PeerScorer.BEST_AGE_LIGHT = 15 * 60 * 1000; // 15 minutes
+PeerScorer.MAX_AGE_LIGHT = 6 * 60 * 60 * 1000; // 6 hours
+
+PeerScorer.MIN_AGE_NANO = 60 * 1000; // 1 minute
+PeerScorer.BEST_AGE_NANO = 5 * 60 * 1000; // 5 minutes
+PeerScorer.MAX_AGE_NANO = 30 * 60 * 1000; // 30 minutes
+
+PeerScorer.BEST_PROTOCOL_WS_DISTRIBUTION = 0.15; // 15%
+
+Class.register(PeerScorer);
 
 class NetworkConfig {
     /**
@@ -29378,12 +31508,17 @@ class NetworkConfig {
      * @returns {void}
      */
     async _init(db) {
+        if (this._keyPair) {
+            return;
+        }
+
         /** @type {KeyPair} */
         let keys = await db.get('keys');
         if (!keys) {
             keys = KeyPair.generate();
             await db.put('keys', keys);
         }
+
         this._keyPair = keys;
         this._peerId = keys.publicKey.toPeerId();
     }
@@ -29571,33 +31706,18 @@ Class.register(DumbNetworkConfig);
 
 class Network extends Observable {
     /**
-     * @type {number}
-     * @constant
-     */
-    static get PEER_COUNT_MAX() {
-        return PlatformUtils.isBrowser() ? 15 : 50000;
-    }
-
-    /**
-     * @type {number}
-     * @constant
-     */
-    static get PEER_COUNT_PER_IP_MAX() {
-        return PlatformUtils.isBrowser() ? 2 : 25;
-    }
-
-    /**
      * @constructor
      * @param {IBlockchain} blockchain
-     * @param {NetworkConfig} netconfig
+     * @param {NetworkConfig} networkConfig
      * @param {Time} time
-     * @listens PeerAddresses#added
-     * @listens WebSocketConnector#connection
-     * @listens WebSocketConnector#error
-     * @listens WebRtcConnector#connection
-     * @listens WebRtcConnector#error
+     * @listens PeerAddressBook#added
+     * @listens ConnectionPool#peer-joined
+     * @listens ConnectionPool#peer-left
+     * @listens ConnectionPool#peers-changed
+     * @listens ConnectionPool#recycling-request
+     * @listens ConnectionPool#connect-error
      */
-    constructor(blockchain, netconfig, time) {
+    constructor(blockchain, networkConfig, time) {
         super();
 
         /**
@@ -29610,7 +31730,7 @@ class Network extends Observable {
          * @type {NetworkConfig}
          * @private
          */
-        this._networkConfig = netconfig;
+        this._networkConfig = networkConfig;
 
         /**
          * @type {Time}
@@ -29641,48 +31761,50 @@ class Network extends Observable {
         this._backedOff = false;
 
         /**
-         * Map of agents indexed by connection ids.
-         * @type {HashMap.<number,NetworkAgent>}
+         * The network's addressbook
+         * @type {PeerAddressBook}
          * @private
          */
-        this._agents = new HashMap();
-
-        // Total bytes sent/received on past connections.
-        /** @type {number} */
-        this._bytesSent = 0;
-        /** @type {number} */
-        this._bytesReceived = 0;
-
-        /** @type {WebSocketConnector} */
-        this._wsConnector = new WebSocketConnector(this._networkConfig);
-        this._wsConnector.on('connection', conn => this._onConnection(conn));
-        this._wsConnector.on('error', peerAddr => this._onError(peerAddr));
-
-        /** @type {WebRtcConnector} */
-        this._rtcConnector = new WebRtcConnector(this._networkConfig);
-        this._rtcConnector.on('connection', conn => this._onConnection(conn));
-        this._rtcConnector.on('error', (peerAddr, reason) => this._onError(peerAddr, reason));
-
-        /**
-         * Helper objects to manage PeerAddresses.
-         * Must be initialized AFTER the WebSocket/WebRtcConnector.
-         * @type {PeerAddresses}
-         * @private
-         */
-        this._addresses = new PeerAddresses(this._networkConfig);
+        this._addresses = new PeerAddressBook(this._networkConfig);
 
         // Relay new addresses to peers.
         this._addresses.on('added', addresses => {
             this._relayAddresses(addresses);
             this._checkPeerCount();
         });
+       
+        /**
+         * Peer connections database & operator
+         * @type {ConnectionPool}
+         * @private
+         */
+        this._connections = new ConnectionPool(this._addresses, networkConfig, blockchain, time);
 
-        /** @type {SignalStore} */
-        this._forwards = new SignalStore();
-    }
+        this._connections.on('peer-joined', peer => this._onPeerJoined(peer));
+        this._connections.on('peer-left', peer => this._onPeerLeft(peer));
+        this._connections.on('peers-changed', () => this._onPeersChanged());
+        this._connections.on('recycling-request', () => this._onRecyclingRequest());
+        this._connections.on('connect-error', () => this._checkPeerCount());
+
+        /**
+         * Helper object to pick PeerAddressBook.
+         * @type {PeerScorer}
+         * @private
+         */
+        this._scorer = new PeerScorer(this._networkConfig, this._addresses, this._connections);
+
+        /**
+         * @type {number|null}
+         * @private
+         */
+        this._houseKeepingIntervalId = null;
+    }       
 
     connect() {
         this._autoConnect = true;
+
+        // Setup housekeeping interval.
+        this._houseKeepingIntervalId = setInterval(() => this._housekeeping(), Network.HOUSEKEEPING_INTERVAL);
 
         // Start connecting to peers.
         this._checkPeerCount();
@@ -29694,22 +31816,60 @@ class Network extends Observable {
     disconnect(reason) {
         this._autoConnect = false;
 
-        // Close all active connections.
-        for (const agent of this._agents.values()) {
-            agent.channel.close(reason || 'manual network disconnect');
-        }
+        // Clear housekeeping interval.
+        clearInterval(this._houseKeepingIntervalId);
+
+        this._connections.disconnect(reason);
     }
 
     // XXX For testing
     disconnectWebSocket() {
         this._autoConnect = false;
 
-        // Close all websocket connections.
-        for (const agent of this._agents.values()) {
-            if (agent.peer.peerAddress.protocol === Protocol.WS) {
-                agent.channel.close('manual websocket disconnect');
-            }
-        }
+        this._connections.disconnectWebSocket();
+    }
+
+    /**
+     * @param {Peer} peer
+     * @fires Network#peer-joined
+     */
+    _onPeerJoined(peer){
+        // Recalculate the network adjusted offset
+        this._updateTimeOffset();
+
+        // Tell others about the address that we just connected to.
+        this._relayAddresses([peer.peerAddress]);
+
+        this.fire('peer-joined', peer);
+    }
+
+    /**
+     * @param {Peer} peer
+     * @fires Network#peer-left
+     */
+    _onPeerLeft(peer) {
+        // Recalculate the network adjusted offset
+        this._updateTimeOffset();
+
+        this.fire('peer-left', peer);
+    }
+
+    /**
+     * @fires Network#peers-changed
+     */
+    _onPeersChanged() {
+        this._checkPeerCount();
+
+        this.fire('peers-changed');
+    }
+
+    _onRecyclingRequest() {
+        this._scorer.recycleConnections(1, CloseType.PEER_CONNECTION_RECYCLED_INBOUND_EXCHANGE, 'Peer connection recycled inbound exchange');
+
+        // set ability to exchange for new inbound connections
+        this._connections.allowInboundExchange = this._scorer.lowestConnectionScore !== null
+            ? this._scorer.lowestConnectionScore < Network.SCORE_INBOUND_EXCHANGE
+            : false;
     }
 
     /**
@@ -29729,22 +31889,22 @@ class Network extends Observable {
         // The NetworkAgent will take care of not sending the addresses twice.
         // In that case, the address will simply be relayed to less peers. Also,
         // the peer that we pick might already know the address.
-        const agents = this._agents.values();
+        const peerConnections = this._connections.values();
         for (let i = 0; i < Network.PEER_COUNT_RELAY; ++i) {
-            const agent = ArrayUtils.randomElement(agents);
-            if (agent) {
-                agent.relayAddresses(addresses);
+            const peerConnection = ArrayUtils.randomElement(peerConnections);
+            if (peerConnection && peerConnection.state === PeerConnectionState.ESTABLISHED && peerConnection.networkAgent) {
+                peerConnection.networkAgent.relayAddresses(addresses);
             }
         }
     }
 
     _checkPeerCount() {
         if (this._autoConnect
-            && this.peerCount + this._addresses.connectingCount < Network.PEER_COUNT_DESIRED
-            && this._addresses.connectingCount < Network.CONNECTING_COUNT_MAX) {
+            && (this._connections.count < Network.PEER_COUNT_DESIRED || this._connections.peerCountFull === 0)
+            && this._connections.connectingCount < Network.CONNECTING_COUNT_MAX) {
 
             // Pick a peer address that we are not connected to yet.
-            const peerAddress = this._addresses.pickAddress();
+            const peerAddress = this._scorer.pickAddress();
 
             // We can't connect if we don't know any more addresses.
             if (!peerAddress) {
@@ -29758,274 +31918,24 @@ class Network extends Observable {
                         this._backedOff = false;
                         this._checkPeerCount();
                     }, oldBackoff);
+
+                    // If we are not connected to any peers (anymore), tell listeners that we are disconnected
+                    // and have given up on trying to connect for the time being. This is primarily useful for tests.
+                    if (this._connections.count === 0) {
+                        this.fire('disconnected');
+                    }
                 }
+
                 return;
             }
 
             // Connect to this address.
-            this._connect(peerAddress);
+            if (!this._connections.connectOutbound(peerAddress)) {
+                this._addresses.close(null, peerAddress, CloseType.CONNECTION_FAILED);
+                setTimeout(() => this._checkPeerCount(), 0);
+            }
         }
         this._backoff = Network.CONNECT_BACKOFF_INITIAL;
-    }
-
-    /**
-     * @param {PeerAddress} peerAddress
-     * @returns {void}
-     * @private
-     */
-    _connect(peerAddress) {
-        switch (peerAddress.protocol) {
-            case Protocol.WS:
-                Log.d(Network, `Connecting to ${peerAddress} ...`);
-                if (this._wsConnector.connect(peerAddress)) {
-                    this._addresses.connecting(peerAddress);
-                }
-                break;
-
-            case Protocol.RTC: {
-                const signalChannel = this._addresses.getChannelByPeerId(peerAddress.peerId);
-                Log.d(Network, `Connecting to ${peerAddress} via ${signalChannel.peerAddress}...`);
-                if (this._rtcConnector.connect(peerAddress, signalChannel)) {
-                    this._addresses.connecting(peerAddress);
-                }
-                break;
-            }
-
-            default:
-                Log.e(Network, `Cannot connect to ${peerAddress} - unsupported protocol`);
-                this._onError(peerAddress);
-        }
-    }
-
-    /**
-     * @listens PeerChannel#signal
-     * @listens PeerChannel#ban
-     * @listens NetworkAgent#handshake
-     * @listens NetworkAgent#close
-     * @param {PeerConnection} conn
-     * @returns {void}
-     * @private
-     */
-    _onConnection(conn) {
-        // Reject connection if we are already connected to this peer address.
-        // This can happen if the peer connects (inbound) while we are
-        // initiating a (outbound) connection to it.
-        if (conn.outbound && this._addresses.isConnected(conn.peerAddress)) {
-            conn.close('duplicate connection (outbound, pre handshake)');
-            return;
-        }
-
-        // Reject peer if we have reached max peer count.
-        if (this.peerCount >= Network.PEER_COUNT_MAX) {
-            if (conn.outbound) {
-                this._addresses.disconnected(null, conn.peerAddress, false);
-            }
-            conn.close(`max peer count reached (${Network.PEER_COUNT_MAX})`);
-            return;
-        }
-
-        // Connection accepted.
-        const connType = conn.inbound ? 'inbound' : 'outbound';
-        Log.d(Network, `Connection established (${connType}) #${conn.id} ${conn.netAddress || conn.peerAddress || '<pending>'}`);
-
-        // Create peer channel.
-        const channel = new PeerChannel(conn);
-        channel.on('signal', msg => this._onSignal(channel, msg));
-        channel.on('ban', reason => this._onBan(channel, reason));
-        channel.on('fail', reason => this._onFail(channel, reason));
-
-        // Create network agent.
-        const agent = new NetworkAgent(this._blockchain, this._addresses, this._networkConfig, channel);
-        agent.on('handshake', peer => this._onHandshake(peer, agent));
-        agent.on('close', (peer, channel, closedByRemote) => this._onClose(peer, channel, closedByRemote));
-
-        // Store the agent.
-        this._agents.put(conn.id, agent);
-
-        // Initiate handshake with the peer.
-        agent.handshake();
-
-        // Call _checkPeerCount() here in case the peer doesn't send us any (new)
-        // addresses to keep on connecting.
-        // Add a delay before calling it to allow RTC peer addresses to be sent to us.
-        setTimeout(() => this._checkPeerCount(), Network.ADDRESS_UPDATE_DELAY);
-    }
-
-
-    /**
-     * Handshake with this peer was successful.
-     * @fires Network#peer-joined
-     * @fires Network#peers-changed
-     * @param {Peer} peer
-     * @param {NetworkAgent} agent
-     * @returns {void}
-     * @private
-     */
-    _onHandshake(peer, agent) {
-        // If the connector was able the determine the peer's netAddress, update the peer's advertised netAddress.
-        if (peer.channel.netAddress) {
-            // TODO What to do if it doesn't match the currently advertised one?
-            if (peer.peerAddress.netAddress && !peer.peerAddress.netAddress.equals(peer.channel.netAddress)) {
-                Log.w(Network, `Got different netAddress ${peer.channel.netAddress} for peer ${peer.peerAddress} `
-                    + `- advertised was ${peer.peerAddress.netAddress}`);
-            }
-
-            // Only set the advertised netAddress if we have the public IP of the peer.
-            // WebRTC connectors might return local IP addresses for peers on the same LAN.
-            if (!peer.channel.netAddress.isPrivate()) {
-                peer.peerAddress.netAddress = peer.channel.netAddress;
-            }
-        }
-        // Otherwise, use the netAddress advertised for this peer if available.
-        else if (peer.channel.peerAddress.netAddress) {
-            peer.channel.netAddress = peer.channel.peerAddress.netAddress;
-        }
-        // Otherwise, we don't know the netAddress of this peer. Use a pseudo netAddress.
-        else {
-            peer.channel.netAddress = NetAddress.UNKNOWN;
-        }
-
-        // Close connection if we are already connected to this peer.
-        if (this._addresses.isConnected(peer.peerAddress)) {
-            // XXX Clear channel.peerAddress to prevent _onClose() from changing
-            // the PeerAddressState of the connected peer.
-            agent.channel.peerAddress = null;
-            agent.channel.close('duplicate connection (post handshake)');
-            return;
-        }
-
-        // Close connection if this peer is banned.
-        if (this._addresses.isBanned(peer.peerAddress)) {
-            agent.channel.close('peer is banned');
-            return;
-        }
-
-        // Close connection if we have too many connections to the peer's IP address.
-        if (peer.netAddress && !peer.netAddress.isPseudo()) {
-            const numConnections = this._agents.values().filter(
-                agent => peer.netAddress.equals(agent.channel.netAddress)).length;
-            if (numConnections > Network.PEER_COUNT_PER_IP_MAX) {
-                agent.channel.close(`connection limit per ip (${Network.PEER_COUNT_PER_IP_MAX}) reached`);
-                return;
-            }
-        }
-
-        // Recalculate the network adjusted offset
-        this._updateTimeOffset();
-
-        // Mark the peer's address as connected.
-        this._addresses.connected(agent.channel, peer.peerAddress);
-
-        // Tell others about the address that we just connected to.
-        this._relayAddresses([peer.peerAddress]);
-
-        // Let listeners know about this peer.
-        this.fire('peer-joined', peer);
-
-        // Let listeners know that the peers changed.
-        this.fire('peers-changed');
-
-        Log.d(Network, () => `[PEER-JOINED] ${peer.peerAddress} ${peer.netAddress} (version=${peer.version}, services=${peer.peerAddress.services}, headHash=${peer.headHash.toBase64()})`);
-    }
-
-    /**
-     * Connection to this peer address failed.
-     * @param {PeerAddress} peerAddress
-     * @param {string|*} [reason]
-     * @returns {void}
-     * @private
-     */
-    _onError(peerAddress, reason) {
-        Log.w(Network, `Connection to ${peerAddress} failed` + (reason ? ` - ${reason}` : ''));
-
-        this._addresses.failure(peerAddress);
-
-        this._checkPeerCount();
-    }
-
-    /**
-     * This peer channel was closed.
-     * @fires Network#peer-left
-     * @fires Network#peers-changed
-     * @param {Peer} peer
-     * @param {PeerChannel} channel
-     * @param {boolean} closedByRemote
-     * @returns {void}
-     * @private
-     */
-    _onClose(peer, channel, closedByRemote) {
-        // Delete agent.
-        this._agents.remove(channel.id);
-
-        // Update total bytes sent/received.
-        this._bytesSent += channel.connection.bytesSent;
-        this._bytesReceived += channel.connection.bytesReceived;
-
-        // channel.peerAddress is undefined for incoming connections pre-handshake.
-        // It is also cleared before closing duplicate connections post-handshake.
-        if (channel.peerAddress) {
-            // Check if the handshake with this peer has completed.
-            if (this._addresses.isConnected(channel.peerAddress)) {
-                // Mark peer as disconnected.
-                this._addresses.disconnected(channel, channel.peerAddress, closedByRemote);
-
-                // Tell listeners that this peer has gone away.
-                this.fire('peer-left', peer);
-
-                // Let listeners know that the peers changed.
-                this.fire('peers-changed');
-
-                const kbTransferred = ((channel.connection.bytesSent
-                    + channel.connection.bytesReceived) / 1000).toFixed(2);
-                Log.d(Network, `[PEER-LEFT] ${peer.peerAddress} ${peer.netAddress} `
-                    + `(version=${peer.version}, headHash=${peer.headHash.toBase64()}, `
-                    + `transferred=${kbTransferred} kB)`);
-            } else {
-                // Treat connections closed pre-handshake by remote as failed attempts.
-                Log.w(Network, `Connection to ${channel.peerAddress} closed pre-handshake (by ${closedByRemote ? 'remote' : 'us'})`);
-                if (closedByRemote) {
-                    this._addresses.failure(channel.peerAddress);
-                } else {
-                    this._addresses.disconnected(null, channel.peerAddress, false);
-                }
-            }
-        }
-
-        // Recalculate the network adjusted offset
-        this._updateTimeOffset();
-
-        this._checkPeerCount();
-    }
-
-    /**
-     * This peer channel was banned.
-     * @param {PeerChannel} channel
-     * @param {string|*} [reason]
-     * @returns {void}
-     * @private
-     */
-    _onBan(channel, reason) {
-        // TODO If this is an inbound connection, the peerAddress might not be set yet.
-        // Ban the netAddress in this case.
-        // XXX We should probably always ban the netAddress as well.
-        if (channel.peerAddress) {
-            this._addresses.ban(channel.peerAddress);
-        } else {
-            // TODO ban netAddress
-        }
-    }
-
-    /**
-     * This peer channel had a network failure.
-     * @param {PeerChannel} channel
-     * @param {string|*} [reason]
-     * @returns {void}
-     * @private
-     */
-    _onFail(channel, reason) {
-        if (channel.peerAddress) {
-            this._addresses.failure(channel.peerAddress);
-        }
     }
 
     /**
@@ -30035,13 +31945,12 @@ class Network extends Observable {
      * @private
      */
     _updateTimeOffset() {
-        const agents = this._agents.values();
+        const peerConnections = this._connections.values();
 
         const offsets = [0]; // Add our own offset.
-        agents.forEach(agent => {
-            // The agent.peer property is null pre-handshake.
-            if (agent.peer) {
-                offsets.push(agent.peer.timeOffset);
+        peerConnections.forEach(peerConnection => {
+            if (peerConnection.state === PeerConnectionState.ESTABLISHED) {
+                offsets.push(peerConnection.networkAgent.peer.timeOffset);
             }
         });
 
@@ -30058,96 +31967,25 @@ class Network extends Observable {
         this._time.offset = Math.max(Math.min(timeOffset, Network.TIME_OFFSET_MAX), -Network.TIME_OFFSET_MAX);
     }
 
-    /* Signaling */
-
     /**
-     * @param {PeerChannel} channel
-     * @param {SignalMessage} msg
      * @returns {void}
      * @private
      */
-    _onSignal(channel, msg) {
-        // Discard signals with invalid TTL.
-        if (msg.ttl > Network.SIGNAL_TTL_INITIAL) {
-            channel.ban('invalid signal ttl');
-            return;
+    _housekeeping() {
+        this._scorer.scoreConnections();
+
+        // recycle
+        if (this.peerCount > Network.PEER_COUNT_RECYCLING_ACTIVE) {
+            // recycle 1% at PEER_COUNT_RECYCLING_ACTIVE, 20% at PEER_COUNT_MAX
+            const percentageToRecycle = (this.peerCount - Network.PEER_COUNT_RECYCLING_ACTIVE) * 0.19 / (Network.PEER_COUNT_MAX - Network.PEER_COUNT_RECYCLING_ACTIVE) + 0.01;
+            const connectionsToRecycle = Math.ceil(this.peerCount * percentageToRecycle);
+            this._scorer.recycleConnections(connectionsToRecycle, CloseType.PEER_CONNECTION_RECYCLED, 'Peer connection recycled');
         }
 
-        // Discard signals that have a payload, which is not properly signed.
-        if (msg.hasPayload() && !msg.verifySignature()) {
-            channel.ban('invalid signature');
-            return;
-        }
-
-        // Can be undefined for non-rtc nodes.
-        const myPeerId = this._networkConfig.peerAddress.peerId;
-
-        // Discard signals from myself.
-        if (msg.senderId.equals(myPeerId)) {
-            Log.w(Network, `Received signal from myself to ${msg.recipientId} from ${channel.peerAddress} (myId: ${myPeerId})`);
-            return;
-        }
-
-        // If the signal has the unroutable flag set and we previously forwarded a matching signal,
-        // mark the route as unusable.
-        if (msg.isUnroutable() && this._forwards.signalForwarded(/*senderId*/ msg.recipientId, /*recipientId*/ msg.senderId, /*nonce*/ msg.nonce)) {
-            const senderAddr = this._addresses.getByPeerId(msg.senderId);
-            this._addresses.unroutable(channel, senderAddr);
-        }
-
-        // If the signal is intended for us, pass it on to our WebRTC connector.
-        if (msg.recipientId.equals(myPeerId)) {
-            // If we sent out a signal that did not reach the recipient because of TTL
-            // or it was unroutable, delete this route.
-            if (this._rtcConnector.isValidSignal(msg) && (msg.isUnroutable() || msg.isTtlExceeded())) {
-                const senderAddr = this._addresses.getByPeerId(msg.senderId);
-                this._addresses.unroutable(channel, senderAddr);
-            }
-            this._rtcConnector.onSignal(channel, msg);
-            return;
-        }
-
-        // Discard signals that have reached their TTL.
-        if (msg.ttl <= 0) {
-            Log.d(Network, `Discarding signal from ${msg.senderId} to ${msg.recipientId} - TTL reached`);
-            // Send signal containing TTL_EXCEEDED flag back in reverse direction.
-            if (msg.flags === 0) {
-                channel.signal(/*senderId*/ msg.recipientId, /*recipientId*/ msg.senderId, msg.nonce, Network.SIGNAL_TTL_INITIAL, SignalMessage.Flag.TTL_EXCEEDED);
-            }
-            return;
-        }
-
-        // Otherwise, try to forward the signal to the intended recipient.
-        const signalChannel = this._addresses.getChannelByPeerId(msg.recipientId);
-        if (!signalChannel) {
-            Log.d(Network, `Failed to forward signal from ${msg.senderId} to ${msg.recipientId} - no route found`);
-            // If we don't know a route to the intended recipient, return signal to sender with unroutable flag set and payload removed.
-            // Only do this if the signal is not already a unroutable response.
-            if (msg.flags === 0) {
-                channel.signal(/*senderId*/ msg.recipientId, /*recipientId*/ msg.senderId, msg.nonce, Network.SIGNAL_TTL_INITIAL, SignalMessage.Flag.UNROUTABLE);
-            }
-            return;
-        }
-
-        // Discard signal if our shortest route to the target is via the sending peer.
-        // XXX Why does this happen?
-        if (signalChannel.peerAddress.equals(channel.peerAddress)) {
-            Log.w(Network, `Discarding signal from ${msg.senderId} to ${msg.recipientId} - shortest route via sending peer`);
-            return;
-        }
-
-        // Decrement ttl and forward signal.
-        signalChannel.signal(msg.senderId, msg.recipientId, msg.nonce, msg.ttl - 1, msg.flags, msg.payload, msg.senderPubKey, msg.signature);
-
-        // We store forwarded messages if there are no special flags set.
-        if (msg.flags === 0) {
-            this._forwards.add(msg.senderId, msg.recipientId, msg.nonce);
-        }
-
-        // XXX This is very spammy!!!
-        // Log.v(Network, `Forwarding signal (ttl=${msg.ttl}) from ${msg.senderId} `
-        //     + `(received from ${channel.peerAddress}) to ${msg.recipientId} `
-        //     + `(via ${signalChannel.peerAddress})`);
+        // set ability to exchange for new inbound connections
+        this._connections.allowInboundExchange = this._scorer.lowestConnectionScore !== null
+            ? this._scorer.lowestConnectionScore < Network.SCORE_INBOUND_EXCHANGE
+            : false;
     }
 
     /** @type {Time} */
@@ -30157,27 +31995,27 @@ class Network extends Observable {
 
     /** @type {number} */
     get peerCount() {
-        return this._addresses.peerCount;
+        return this._connections.peerCount;
     }
 
     /** @type {number} */
     get peerCountWebSocket() {
-        return this._addresses.peerCountWs;
+        return this._connections.peerCountWs;
     }
 
     /** @type {number} */
     get peerCountWebRtc() {
-        return this._addresses.peerCountRtc;
+        return this._connections.peerCountRtc;
     }
 
     /** @type {number} */
     get peerCountDumb() {
-        return this._addresses.peerCountDumb;
+        return this._connections.peerCountDumb;
     }
 
     /** @type {number} */
     get peerCountConnecting() {
-        return this._addresses.connectingCount;
+        return this._connections.connectingCount;
     }
 
     /** @type {number} */
@@ -30187,144 +32025,80 @@ class Network extends Observable {
 
     /** @type {number} */
     get bytesSent() {
-        return this._bytesSent
-            + this._agents.values().reduce((n, agent) => n + agent.channel.connection.bytesSent, 0);
+        return this._connections.bytesSent;
     }
 
     /** @type {number} */
     get bytesReceived() {
-        return this._bytesReceived
-            + this._agents.values().reduce((n, agent) => n + agent.channel.connection.bytesReceived, 0);
+        return this._connections.bytesReceived;
     }
 }
+/**
+ * @type {number}
+ * @constant
+ */
+Network.PEER_COUNT_MAX = PlatformUtils.isBrowser() ? 15 : 50000;
+/**
+ * @type {number}
+ * @constant
+ */
+Network.PEER_COUNT_PER_IP_MAX = PlatformUtils.isBrowser() ? 2 : 25;
+/**
+ * @type {number}
+ * @constant
+ */
+Network.PEER_COUNT_RECYCLING_ACTIVE = PlatformUtils.isBrowser() ? 5 : 1000;
+/**
+ * @type {number}
+ * @constant
+ */
 Network.PEER_COUNT_DESIRED = 6;
+/**
+ * @type {number}
+ * @constant
+ */
 Network.PEER_COUNT_RELAY = 4;
+/**
+ * @type {number}
+ * @constant
+ */
 Network.CONNECTING_COUNT_MAX = 2;
+/**
+ * @type {number}
+ * @constant
+ */
 Network.SIGNAL_TTL_INITIAL = 3;
+/**
+ * @type {number}
+ * @constant
+ */
 Network.ADDRESS_UPDATE_DELAY = 1000; // 1 second
+/**
+ * @type {number}
+ * @constant
+ */
 Network.CONNECT_BACKOFF_INITIAL = 1000; // 1 second
+/**
+ * @type {number}
+ * @constant
+ */
 Network.CONNECT_BACKOFF_MAX = 5 * 60 * 1000; // 5 minutes
+/**
+ * @type {number}
+ * @constant
+ */
 Network.TIME_OFFSET_MAX = 15 * 60 * 1000; // 15 minutes
+/**
+ * @type {number}
+ * @constant
+ */
+Network.HOUSEKEEPING_INTERVAL = 5 * 60 * 1000; // 5 minutes
+/**
+ * @type {number}
+ * @constant
+ */
+Network.SCORE_INBOUND_EXCHANGE = 0.5;
 Class.register(Network);
-
-class SignalStore {
-    /**
-     * @param {number} maxSize maximum number of entries
-     */
-    constructor(maxSize = 1000) {
-        /** @type {number} */
-        this._maxSize = maxSize;
-        /** @type {Queue.<ForwardedSignal>} */
-        this._queue = new Queue();
-        /** @type {HashMap.<ForwardedSignal, number>} */
-        this._store = new HashMap();
-    }
-
-    /** @type {number} */
-    get length() {
-        return this._queue.length;
-    }
-
-    /**
-     * @param {PeerId} senderId
-     * @param {PeerId} recipientId
-     * @param {number} nonce
-     */
-    add(senderId, recipientId, nonce) {
-        // If we already forwarded such a message, just update timestamp.
-        if (this.contains(senderId, recipientId, nonce)) {
-            const signal = new ForwardedSignal(senderId, recipientId, nonce);
-            this._store.put(signal, Date.now());
-            this._queue.remove(signal);
-            this._queue.enqueue(signal);
-            return;
-        }
-
-        // Delete oldest if needed.
-        if (this.length >= this._maxSize) {
-            const oldest = this._queue.dequeue();
-            this._store.remove(oldest);
-        }
-        const signal = new ForwardedSignal(senderId, recipientId, nonce);
-        this._queue.enqueue(signal);
-        this._store.put(signal, Date.now());
-    }
-
-    /**
-     * @param {PeerId} senderId
-     * @param {PeerId} recipientId
-     * @param {number} nonce
-     * @return {boolean}
-     */
-    contains(senderId, recipientId, nonce) {
-        const signal = new ForwardedSignal(senderId, recipientId, nonce);
-        return this._store.contains(signal);
-    }
-
-    /**
-     * @param {PeerId} senderId
-     * @param {PeerId} recipientId
-     * @param {number} nonce
-     * @return {boolean}
-     */
-    signalForwarded(senderId, recipientId, nonce) {
-        const signal = new ForwardedSignal(senderId, recipientId, nonce);
-        const lastSeen = this._store.get(signal);
-        if (!lastSeen) {
-            return false;
-        }
-        const valid = lastSeen + ForwardedSignal.SIGNAL_MAX_AGE > Date.now();
-        if (!valid) {
-            // Because of the ordering, we know that everything after that is invalid too.
-            const toDelete = this._queue.dequeueUntil(signal);
-            for (const dSignal of toDelete) {
-                this._store.remove(dSignal);
-            }
-        }
-        return valid;
-    }
-}
-SignalStore.SIGNAL_MAX_AGE = 10 /* seconds */;
-Class.register(SignalStore);
-
-class ForwardedSignal {
-    /**
-     * @param {PeerId} senderId
-     * @param {PeerId} recipientId
-     * @param {number} nonce
-     */
-    constructor(senderId, recipientId, nonce) {
-        /** @type {PeerId} */
-        this._senderId = senderId;
-        /** @type {PeerId} */
-        this._recipientId = recipientId;
-        /** @type {number} */
-        this._nonce = nonce;
-    }
-
-    /**
-     * @param {ForwardedSignal} o
-     * @returns {boolean}
-     */
-    equals(o) {
-        return o instanceof ForwardedSignal
-            && this._senderId.equals(o._senderId)
-            && this._recipientId.equals(o._recipientId)
-            && this._nonce === o._nonce;
-    }
-
-    hashCode() {
-        return this.toString();
-    }
-
-    /**
-     * @returns {string}
-     */
-    toString() {
-        return `ForwardedSignal{senderId=${this._senderId}, recipientId=${this._recipientId}, nonce=${this._nonce}}`;
-    }
-}
-Class.register(ForwardedSignal);
 
 class NetUtils {
     /**
@@ -30624,704 +32398,6 @@ NetUtils.IPv4_PRIVATE_NETWORK = [
 ];
 Class.register(NetUtils);
 
-class PeerChannel extends Observable {
-    /**
-     * @listens PeerConnection#message
-     * @param {PeerConnection} connection
-     */
-    constructor(connection) {
-        super();
-        this._conn = connection;
-        this._conn.on('message', msg => this._onMessage(msg));
-
-        // Forward specified events on the connection to listeners of this Observable.
-        this.bubble(this._conn, 'close', 'error', 'ban');
-    }
-
-    /**
-     * @param {Uint8Array} rawMsg
-     * @private
-     */
-    _onMessage(rawMsg) {
-        let msg = null, type = null;
-
-        try {
-            type = MessageFactory.peekType(rawMsg);
-            msg = MessageFactory.parse(rawMsg);
-        } catch(e) {
-            Log.w(PeerChannel, `Failed to parse message from ${this.peerAddress || this.netAddress}`, e.message || e);
-
-            // From the Bitcoin Reference:
-            //  "Be careful of reject message feedback loops where two peers
-            //   each don’t understand each other’s reject messages and so keep
-            //   sending them back and forth forever."
-
-            // If the message does not make sense at a whole or we fear to get into a reject loop,
-            // we ban the peer instead.
-            if (!type || type === Message.Type.REJECT) {
-                this.ban('Failed to parse message type');
-                return;
-            }
-
-            // Otherwise inform other node and ignore message.
-            this.reject(type, RejectMessage.Code.REJECT_MALFORMED, e.message || e);
-            return;
-        }
-
-        if (!msg) return;
-
-        try {
-            this.fire(PeerChannel.Event[msg.type], msg, this);
-        } catch (e) {
-            Log.w(PeerChannel, `Error while processing ${msg.type} message from ${this.peerAddress || this.netAddress}: ${e}`);
-        }
-    }
-
-    /**
-     * @param {Message.Type|Array.<Message.Type>} types
-     * @param {function()} timeoutCallback
-     * @param {number} [msgTimeout]
-     * @param {number} [chunkTimeout]
-     */
-    expectMessage(types, timeoutCallback, msgTimeout, chunkTimeout) {
-        this._conn.expectMessage(types, timeoutCallback, msgTimeout, chunkTimeout);
-    }
-
-    /**
-     * @param {Message.Type} type
-     * @returns {boolean}
-     */
-    isExpectingMessage(type) {
-        return this._conn.isExpectingMessage(type);
-    }
-
-    /**
-     * @param {Message} msg
-     * @return {boolean}
-     * @private
-     */
-    _send(msg) {
-        return this._conn.send(msg.serialize());
-    }
-
-    /**
-     * @param {string} [reason]
-     */
-    close(reason) {
-        this._conn.close(reason);
-    }
-
-    /**
-     * @param {string} [reason]
-     */
-    ban(reason) {
-        this._conn.ban(reason);
-    }
-
-    /**
-     * @param {string} [reason]
-     */
-    fail(reason) {
-        this._conn.fail(reason);
-    }
-
-    /**
-     * @param {PeerAddress} peerAddress
-     * @param {Hash} headHash
-     * @param {Uint8Array} challengeNonce
-     * @return {boolean}
-     */
-    version(peerAddress, headHash, challengeNonce) {
-        return this._send(new VersionMessage(Version.CODE, peerAddress, Block.GENESIS.HASH, headHash, challengeNonce));
-    }
-
-    /**
-     * @param {PublicKey} publicKey
-     * @param {Signature} signature
-     * @returns {boolean}
-     */
-    verack(publicKey, signature) {
-        return this._send(new VerAckMessage(publicKey, signature));
-    }
-
-    /**
-     * @param {Array.<InvVector>} vectors
-     * @return {boolean}
-     */
-    inv(vectors) {
-        return this._send(new InvMessage(vectors));
-    }
-
-    /**
-     * @param {Array.<InvVector>} vectors
-     * @return {boolean}
-     */
-    notFound(vectors) {
-        return this._send(new NotFoundMessage(vectors));
-    }
-
-    /**
-     * @param {Array.<InvVector>} vectors
-     * @return {boolean}
-     */
-    getData(vectors) {
-        return this._send(new GetDataMessage(vectors));
-    }
-
-    /**
-     * @param {Array.<InvVector>} vectors
-     * @return {boolean}
-     */
-    getHeader(vectors) {
-        return this._send(new GetHeaderMessage(vectors));
-    }
-
-    /**
-     * @param {Block} block
-     * @return {boolean}
-     */
-    block(block) {
-        return this._send(new BlockMessage(block));
-    }
-
-    /**
-     * @param {BlockHeader} header
-     * @return {boolean}
-     */
-    header(header) {
-        return this._send(new HeaderMessage(header));
-    }
-
-    /**
-     * @param {Transaction} transaction
-     * @param {?AccountsProof} [accountsProof]
-     * @return {boolean}
-     */
-    tx(transaction, accountsProof) {
-        return this._send(new TxMessage(transaction, accountsProof));
-    }
-
-    /**
-     * @param {Array.<Hash>} locators
-     * @param {number} maxInvSize
-     * @param {boolean} [ascending]
-     * @return {boolean}
-     */
-    getBlocks(locators, maxInvSize=BaseInventoryMessage.VECTORS_MAX_COUNT, ascending=true) {
-        return this._send(new GetBlocksMessage(locators, maxInvSize, ascending ? GetBlocksMessage.Direction.FORWARD : GetBlocksMessage.Direction.BACKWARD));
-    }
-
-    /**
-     * @return {boolean}
-     */
-    mempool() {
-        return this._send(new MempoolMessage());
-    }
-
-    /**
-     * @param {Message.Type} messageType
-     * @param {RejectMessage.Code} code
-     * @param {string} reason
-     * @param {Uint8Array} [extraData]
-     * @return {boolean}
-     */
-    reject(messageType, code, reason, extraData) {
-        return this._send(new RejectMessage(messageType, code, reason, extraData));
-    }
-
-    /**
-     * @param {Subscription} subscription
-     * @returns {boolean}
-     */
-    subscribe(subscription) {
-        return this._send(new SubscribeMessage(subscription));
-    }
-
-    /**
-     * @param {Array.<PeerAddress>} addresses
-     * @return {boolean}
-     */
-    addr(addresses) {
-        return this._send(new AddrMessage(addresses));
-    }
-
-    /**
-     * @param {number} protocolMask
-     * @param {number} serviceMask
-     * @return {boolean}
-     */
-    getAddr(protocolMask, serviceMask) {
-        return this._send(new GetAddrMessage(protocolMask, serviceMask));
-    }
-
-    /**
-     * @param {number} nonce
-     * @return {boolean}
-     */
-    ping(nonce) {
-        return this._send(new PingMessage(nonce));
-    }
-
-    /**
-     * @param {number} nonce
-     * @return {boolean}
-     */
-    pong(nonce) {
-        return this._send(new PongMessage(nonce));
-    }
-
-    /**
-     * @param {PeerId} senderId
-     * @param {PeerId} recipientId
-     * @param {number} nonce
-     * @param {number} ttl
-     * @param {SignalMessage.Flags|number} flags
-     * @param {Uint8Array} [payload]
-     * @param {PublicKey} [senderPubKey]
-     * @param {Signature} [signature]
-     * @return {boolean}
-     */
-    signal(senderId, recipientId, nonce, ttl, flags, payload, senderPubKey, signature) {
-        return this._send(new SignalMessage(senderId, recipientId, nonce, ttl, flags, payload, senderPubKey, signature));
-    }
-
-    /**
-     * @param {Hash} blockHash
-     * @param {Array.<Address>} addresses
-     * @return {boolean}
-     */
-    getAccountsProof(blockHash, addresses) {
-        return this._send(new GetAccountsProofMessage(blockHash, addresses));
-    }
-
-    /**
-     * @param {Hash} blockHash
-     * @param {AccountsProof} [proof]
-     * @return {boolean}
-     */
-    accountsProof(blockHash, proof) {
-        return this._send(new AccountsProofMessage(blockHash, proof));
-    }
-
-    /**
-     * @return {boolean}
-     */
-    getChainProof() {
-        return this._send(new GetChainProofMessage());
-    }
-
-    /**
-     * @param {ChainProof} proof
-     * @return {boolean}
-     */
-    chainProof(proof) {
-        return this._send(new ChainProofMessage(proof));
-    }
-
-    /**
-     * @param {Hash} blockHash
-     * @param {string} startPrefix
-     * @return {boolean}
-     */
-    getAccountsTreeChunk(blockHash, startPrefix) {
-        return this._send(new GetAccountsTreeChunkMessage(blockHash, startPrefix));
-    }
-
-    /**
-     * @param {Hash} blockHash
-     * @param {AccountsTreeChunk} [chunk]
-     * @return {boolean}
-     */
-    accountsTreeChunk(blockHash, chunk) {
-        return this._send(new AccountsTreeChunkMessage(blockHash, chunk));
-    }
-
-    /**
-     * @param {Hash} blockHash
-     * @param {Array.<Address>} addresses
-     * @return {boolean}
-     */
-    getTransactionsProof(blockHash, addresses) {
-        return this._send(new GetTransactionsProofMessage(blockHash, addresses));
-    }
-
-    /**
-     * @param {Hash} blockHash
-     * @param {TransactionsProof} [proof]
-     * @return {boolean}
-     */
-    transactionsProof(blockHash, proof) {
-        return this._send(new TransactionsProofMessage(blockHash, proof));
-    }
-
-    /**
-     * @param {Address} address
-     * @returns {boolean}
-     */
-    getTransactionReceipts(address) {
-        return this._send(new GetTransactionReceiptsMessage(address));
-    }
-
-    /**
-     * @param {Array.<TransactionReceipt>} transactionReceipts
-     * @returns {boolean}
-     */
-    transactionReceipts(transactionReceipts) {
-        return this._send(new TransactionReceiptsMessage(transactionReceipts));
-    }
-
-    /**
-     * @param {PeerChannel} o
-     * @return {boolean}
-     */
-    equals(o) {
-        return o instanceof PeerChannel
-            && this._conn.equals(o.connection);
-    }
-
-    /**
-     * @returns {string}
-     */
-    hashCode() {
-        return this._conn.hashCode();
-    }
-
-    /**
-     * @return {string}
-     */
-    toString() {
-        return `PeerChannel{conn=${this._conn}}`;
-    }
-
-    /** @type {PeerConnection} */
-    get connection() {
-        return this._conn;
-    }
-
-    /** @type {number} */
-    get id() {
-        return this._conn.id;
-    }
-
-    /** @type {number} */
-    get protocol() {
-        return this._conn.protocol;
-    }
-
-    /** @type {PeerAddress} */
-    get peerAddress() {
-        return this._conn.peerAddress;
-    }
-
-    /** @type {PeerAddress} */
-    set peerAddress(value) {
-        this._conn.peerAddress = value;
-    }
-
-    /** @type {NetAddress} */
-    get netAddress() {
-        return this._conn.netAddress;
-    }
-
-    /** @type {NetAddress} */
-    set netAddress(value) {
-        this._conn.netAddress = value;
-    }
-
-    /** @type {boolean} */
-    get closed() {
-        return this._conn.closed;
-    }
-}
-Class.register(PeerChannel);
-
-PeerChannel.Event = {};
-PeerChannel.Event[Message.Type.VERSION] = 'version';
-PeerChannel.Event[Message.Type.INV] = 'inv';
-PeerChannel.Event[Message.Type.GET_DATA] = 'get-data';
-PeerChannel.Event[Message.Type.GET_HEADER] = 'get-header';
-PeerChannel.Event[Message.Type.NOT_FOUND] = 'not-found';
-PeerChannel.Event[Message.Type.GET_BLOCKS] = 'get-blocks';
-PeerChannel.Event[Message.Type.BLOCK] = 'block';
-PeerChannel.Event[Message.Type.HEADER] = 'header';
-PeerChannel.Event[Message.Type.TX] = 'tx';
-PeerChannel.Event[Message.Type.MEMPOOL] = 'mempool';
-PeerChannel.Event[Message.Type.REJECT] = 'reject';
-PeerChannel.Event[Message.Type.SUBSCRIBE] = 'subscribe';
-PeerChannel.Event[Message.Type.ADDR] = 'addr';
-PeerChannel.Event[Message.Type.GET_ADDR] = 'get-addr';
-PeerChannel.Event[Message.Type.PING] = 'ping';
-PeerChannel.Event[Message.Type.PONG] = 'pong';
-PeerChannel.Event[Message.Type.SIGNAL] = 'signal';
-PeerChannel.Event[Message.Type.GET_CHAIN_PROOF] = 'get-chain-proof';
-PeerChannel.Event[Message.Type.CHAIN_PROOF] = 'chain-proof';
-PeerChannel.Event[Message.Type.GET_ACCOUNTS_PROOF] = 'get-accounts-proof';
-PeerChannel.Event[Message.Type.ACCOUNTS_PROOF] = 'accounts-proof';
-PeerChannel.Event[Message.Type.GET_ACCOUNTS_TREE_CHUNK] = 'get-accounts-tree-chunk';
-PeerChannel.Event[Message.Type.ACCOUNTS_TREE_CHUNK] = 'accounts-tree-chunk';
-PeerChannel.Event[Message.Type.GET_TRANSACTIONS_PROOF] = 'get-transactions-proof';
-PeerChannel.Event[Message.Type.TRANSACTIONS_PROOF] = 'transactions-proof';
-PeerChannel.Event[Message.Type.GET_TRANSACTION_RECEIPTS] = 'get-transaction-receipts';
-PeerChannel.Event[Message.Type.TRANSACTION_RECEIPTS] = 'transaction-receipts';
-PeerChannel.Event[Message.Type.VERACK] = 'verack';
-
-class PeerConnection extends Observable {
-    /**
-     * @param {DataChannel} channel
-     * @param {number} protocol
-     * @param {NetAddress} netAddress
-     * @param {PeerAddress} peerAddress
-     */
-    constructor(channel, protocol, netAddress, peerAddress) {
-        super();
-        /** @type {DataChannel} */
-        this._channel = channel;
-
-        /** @type {number} */
-        this._protocol = protocol;
-        /** @type {NetAddress} */
-        this._netAddress = netAddress;
-        /** @type {PeerAddress} */
-        this._peerAddress = peerAddress;
-
-        /** @type {number} */
-        this._bytesSent = 0;
-        /** @type {number} */
-        this._bytesReceived = 0;
-
-        /** @type {boolean} */
-        this._inbound = !peerAddress;
-        /** @type {boolean} */
-        this._closedByUs = false;
-        /** @type {boolean} */
-        this._closed = false;
-
-        // Unique id for this connection.
-        /** @type {number} */
-        this._id = PeerConnection._instanceCount++;
-
-        this._channel.on('message', msg => this._onMessage(msg));
-        this._channel.on('close', () => this._onClose());
-        this._channel.on('error', e => this.fire('error', e, this));
-    }
-
-    _onMessage(msg) {
-        // Don't emit messages if this channel is closed.
-        if (this._closed) {
-            return;
-        }
-
-        this._bytesReceived += msg.byteLength || msg.length;
-        this.fire('message', msg, this);
-    }
-
-    _onClose() {
-        // Don't fire close event again when already closed.
-        if (this._closed) {
-            return;
-        }
-
-        // Mark this connection as closed.
-        this._closed = true;
-
-        // Tell listeners that this connection has closed.
-        this.fire('close', !this._closedByUs, this);
-    }
-
-    _close() {
-        this._closedByUs = true;
-
-        // Don't wait for the native close event to fire.
-        this._onClose();
-
-        // Close the native channel.
-        this._channel.close();
-    }
-
-    /**
-     * @return {boolean}
-     * @private
-     */
-    _isChannelOpen() {
-        return this._channel.readyState === DataChannel.ReadyState.OPEN;
-    }
-
-    /**
-     * @return {boolean}
-     * @private
-     */
-    _isChannelClosing() {
-        return this._channel.readyState === DataChannel.ReadyState.CLOSING;
-    }
-
-    /**
-     * @return {boolean}
-     * @private
-     */
-    _isChannelClosed() {
-        return this._channel.readyState === DataChannel.ReadyState.CLOSED;
-    }
-
-    /**
-     * @param {Uint8Array} msg
-     * @return {boolean}
-     */
-    send(msg) {
-        const logAddress = this._peerAddress || this._netAddress;
-        if (this._closed) {
-            return false;
-        }
-
-        // Fire close event (early) if channel is closing/closed.
-        if (this._isChannelClosing() || this._isChannelClosed()) {
-            Log.w(PeerConnection, `Not sending data to ${logAddress} - channel closing/closed (${this._channel.readyState})`);
-            this._onClose();
-            return false;
-        }
-
-        // Don't attempt to send if channel is not (yet) open.
-        if (!this._isChannelOpen()) {
-            Log.w(PeerConnection, `Not sending data to ${logAddress} - channel not open (${this._channel.readyState})`);
-            return false;
-        }
-
-        try {
-            this._channel.send(msg);
-            this._bytesSent += msg.byteLength || msg.length;
-            return true;
-        } catch (e) {
-            Log.e(PeerConnection, `Failed to send data to ${logAddress}: ${e.message || e}`);
-            return false;
-        }
-    }
-
-    /**
-     * @param {Message.Type|Array.<Message.Type>} types
-     * @param {function()} timeoutCallback
-     * @param {number} [msgTimeout]
-     * @param {number} [chunkTimeout]
-     */
-    expectMessage(types, timeoutCallback, msgTimeout, chunkTimeout) {
-        this._channel.expectMessage(types, timeoutCallback, msgTimeout, chunkTimeout);
-    }
-
-    /**
-     * @param {Message.Type} type
-     * @returns {boolean}
-     */
-    isExpectingMessage(type) {
-        return this._channel.isExpectingMessage(type);
-    }
-
-    /**
-     * @param {string} [reason]
-     */
-    close(reason) {
-        const connType = this._inbound ? 'inbound' : 'outbound';
-        Log.d(PeerConnection, `Closing ${connType} connection #${this._id} ${this._peerAddress || this._netAddress}` + (reason ? ` - ${reason}` : ''));
-        this._close();
-    }
-
-    /**
-     * @param {string} [reason]
-     */
-    ban(reason) {
-        Log.w(PeerConnection, `Banning peer ${this._peerAddress || this._netAddress}` + (reason ? ` - ${reason}` : ''));
-        this._close();
-        this.fire('ban', reason, this);
-    }
-
-    /**
-     * @param {string} [reason]
-     */
-    fail(reason) {
-        Log.w(PeerConnection, `Network failure on peer ${this._peerAddress || this._netAddress}` + (reason ? ` - ${reason}` : ''));
-        this._close();
-        this.fire('fail', reason, this);
-    }
-
-    /**
-     * @param {PeerConnection} o
-     * @return {boolean}
-     */
-    equals(o) {
-        return o instanceof PeerConnection
-            && this._id === o.id;
-    }
-
-    /**
-     * @returns {string}
-     */
-    hashCode() {
-        return this._id.toString();
-    }
-
-    /**
-     * @return {string}
-     */
-    toString() {
-        return `PeerConnection{id=${this._id}, protocol=${this._protocol}, peerAddress=${this._peerAddress}, netAddress=${this._netAddress}}`;
-    }
-
-    /** @type {number} */
-    get id() {
-        return this._id;
-    }
-
-    /** @type {number} */
-    get protocol() {
-        return this._protocol;
-    }
-
-    /** @type {PeerAddress} */
-    get peerAddress() {
-        return this._peerAddress;
-    }
-
-    /** @type {PeerAddress} */
-    set peerAddress(value) {
-        this._peerAddress = value;
-    }
-
-    /** @type {NetAddress} */
-    get netAddress() {
-        return this._netAddress;
-    }
-
-    /** @type {NetAddress} */
-    set netAddress(value) {
-        this._netAddress = value;
-    }
-
-    /** @type {number} */
-    get bytesSent() {
-        return this._bytesSent;
-    }
-
-    /** @type {number} */
-    get bytesReceived() {
-        return this._bytesReceived;
-    }
-
-    /** @type {boolean} */
-    get inbound() {
-        return this._inbound;
-    }
-
-    /** @type {boolean} */
-    get outbound() {
-        return !this._inbound;
-    }
-
-    /** @type {boolean} */
-    get closed() {
-        return this._closed;
-    }
-}
-// Used to generate unique PeerConnection ids.
-PeerConnection._instanceCount = 0;
-Class.register(PeerConnection);
-
 class PeerKeyStore {
     /**
      * @returns {Promise.<PeerKeyStore>}
@@ -31426,6 +32502,37 @@ class Peer {
          * @type {number}
          */
         this._timeOffset = timeOffset;
+
+        this._setNetAddress();
+    }
+
+    /**
+     * @private
+     * @returns {void}
+     */
+    _setNetAddress() {
+        // If the connector was able the determine the peer's netAddress, update the peer's advertised netAddress.
+        if (this.channel.netAddress) {
+            // TODO What to do if it doesn't match the currently advertised one?
+            if (this.peerAddress.netAddress && !this.peerAddress.netAddress.equals(this.channel.netAddress)) {
+                Log.w(Peer, `Got different netAddress ${this.channel.netAddress} for ${this.peerAddress} `
+                    + `- advertised was ${this.peerAddress.netAddress}`);
+            }
+
+            // Only set the advertised netAddress if we have the public IP of the peer.
+            // WebRTC connectors might return local IP addresses for peers on the same LAN.
+            if (!this.channel.netAddress.isPrivate()) {
+                this.peerAddress.netAddress = this.channel.netAddress;
+            }
+        }
+        // Otherwise, use the netAddress advertised for this peer if available.
+        else if (this.channel.peerAddress.netAddress) {
+            this.channel.netAddress = this.channel.peerAddress.netAddress;
+        }
+        // Otherwise, we don't know the netAddress of this peer. Use a pseudo netAddress.
+        else {
+            this.channel.netAddress = NetAddress.UNKNOWN;
+        }
     }
 
     /** @type {PeerChannel} */
@@ -33001,11 +34108,12 @@ class CryptoWorker {
 
     /**
      * @param {Uint8Array} block
+     * @param {Array.<bool>} transactionValid
      * @param {number} timeNow
      * @param {Uint8Array} genesisHash
      * @returns {Promise.<{valid: boolean, pow: SerialBuffer, interlinkHash: SerialBuffer, bodyHash: SerialBuffer}>}
      */
-    async blockVerify(block, timeNow, genesisHash) {}
+    async blockVerify(block, transactionValid, timeNow, genesisHash) {}
 }
 CryptoWorker.ARGON2_HASH_SIZE = 32;
 CryptoWorker.BLAKE2_HASH_SIZE = 32;
@@ -33521,21 +34629,26 @@ class CryptoWorkerImpl extends IWorker.Stub(CryptoWorker) {
 
     /**
      * @param {Uint8Array} blockSerialized
+     * @param {Array.<boolean|undefined>} transactionValid
      * @param {number} timeNow
      * @param {Uint8Array} genesisHash
      * @returns {Promise.<{valid: boolean, pow: SerialBuffer, interlinkHash: SerialBuffer, bodyHash: SerialBuffer}>}
      */
-    async blockVerify(blockSerialized, timeNow, genesisHash) {
+    async blockVerify(blockSerialized, transactionValid, timeNow, genesisHash) {
         // XXX Create a stub genesis block within the worker.
         if (!Block.GENESIS) {
             Block.GENESIS = { HASH: Hash.unserialize(new SerialBuffer(genesisHash)) };
         }
 
         const block = Block.unserialize(new SerialBuffer(blockSerialized));
-        const valid = await block.computeVerify(timeNow);
+        for (let i = 0; i < transactionValid.length; i++) {
+            block.body.transactions[i]._valid = transactionValid[i];
+        }
+
+        const valid = await block._verify(timeNow);
         const pow = await block.header.pow();
-        const interlinkHash = await block.interlink.hash();
-        const bodyHash = await block.body.hash();
+        const interlinkHash = block.interlink.hash();
+        const bodyHash = block.body.hash();
         return { valid: valid, pow: pow.serialize(), interlinkHash: interlinkHash.serialize(), bodyHash: bodyHash.serialize() };
     }
 }
