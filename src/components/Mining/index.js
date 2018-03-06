@@ -81,10 +81,8 @@ class Mining extends React.Component {
     }
 
     checkUpTime = () => {
-        console.log('checkUpTime >>>')
         var _upTime = JSON.parse(window.localStorage.getItem('upTime'))
         if (_upTime) {
-            console.log('_upTime ', _upTime)
             this.setState({
                 upTime: _upTime
             }, () => {
@@ -98,7 +96,6 @@ class Mining extends React.Component {
     startCountUp = () => {
         if (!countUpInterval) {
             countUpInterval = setInterval(() => {
-                console.log((moment().unix() - this.state.upTime.start))
                 this.setState({
                     countUp: moment.duration((moment().unix() - this.state.upTime.start), "seconds").format("h [hrs], m [min], s [sec]")
                 })
@@ -130,14 +127,10 @@ class Mining extends React.Component {
 
     miningWalletTotal = () => {
         var _miningWallet = this.props.nimiq.miningWallet || JSON.parse(localStorage.getItem('miningWallet'));
-        console.log('_miningWallet ', _miningWallet)
         if (_miningWallet) {
             var miningWallet = _.find(this.props.nimiq.wallets, (wallet) => {
-                console.log(wallet.address, _miningWallet)
                 return wallet.address === _miningWallet
             })
-
-            console.log('miningWallet ', miningWallet)
 
             if (miningWallet) {
                 return miningWallet.minedBlocks.length

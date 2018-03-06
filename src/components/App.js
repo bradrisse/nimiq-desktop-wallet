@@ -14,9 +14,6 @@ import { MuiThemeProvider, createMuiTheme } from 'material-ui/styles';
 import * as themes from '../themes';
 import '../assets/css/App.css';
 
-
-console.log('themes ', themes)
-
 const $ = {};
 var db;
 
@@ -347,7 +344,6 @@ class App extends React.Component {
     }
 
     _onTxsProcessed = () => {
-        console.log('_onTxsProcessed >>>')
         const {nimiq} = this.props;
         if (nimiq.pendingTransaction) {
             if (!$.mempool.getTransaction(nimiq.pendingTransaction._hash)) {
@@ -476,7 +472,6 @@ class App extends React.Component {
                             _.each(transactions, (_transaction) => {
                                 $.consensus.blockchain.getBlock(_transaction.blockHash).then((block) => {
                                     _.each(block.body.transactions, (transaction) => {
-                                        console.log('transaction ', transaction);
                                         var _recipient = transaction.recipient.toUserFriendlyAddress();
                                         var _sender = transaction.sender.toUserFriendlyAddress();
                                         var currentAddress = address.toUserFriendlyAddress();
@@ -571,7 +566,6 @@ class App extends React.Component {
 
     render() {
         const {nimiq} = this.props;
-        console.log('nimiq ', nimiq)
         return (
             <MuiThemeProvider theme={createMuiTheme(themes.default[nimiq.theme])}>
                 <FullHeight>

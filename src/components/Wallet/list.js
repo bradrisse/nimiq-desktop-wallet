@@ -32,7 +32,6 @@ class WalletList extends React.Component {
     addWallet = () => {
         window.Nimiq.Wallet.generate().then(wlt => {
             window.$.walletStore.put(wlt);
-            console.log('wlt ', wlt)
             var _newWallet = {
                 name: '',
                 address: wlt.address.toUserFriendlyAddress(),
@@ -45,7 +44,6 @@ class WalletList extends React.Component {
 
     render() {
         const { classes, nimiq, t } = this.props;
-        console.log('nimiq.wallets ', nimiq.wallets.length)
         return (
             <div className={classes.root}>
                 <FullHeight scroll subtract={100}>

@@ -108,9 +108,7 @@ class PersonalWallet extends React.Component {
     createWallet = () => {
         window.Nimiq.Wallet.generate().then(wlt => {
             var encrypted = wlt.exportEncrypted('asfdasfasdfasf3df43433fds!!!!sfsdfdsf')
-            console.log('encrypted ', encrypted)
             var plain = wlt.exportPlain();
-            console.log('plain ', plain)
             window.$.walletStore.put(wlt);
             var _mnemonicPhrase = MnemonicPhrase.keyToMnemonic(wlt.keyPair.publicKey.toHex());
             var splitPhrase = _mnemonicPhrase.split(' ');
