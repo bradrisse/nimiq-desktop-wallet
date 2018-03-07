@@ -37,7 +37,7 @@ export default {
             }
         },
         MuiTab: {
-            rootInherit: {
+            root: {
                 minWidth: 130
             }
         },

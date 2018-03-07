@@ -15,6 +15,8 @@ i18n
             default: ['en'],
         },
 
+        load: 'languageOnly',
+
         // have a common namespace used around the full app
         ns: ['translations'],
         defaultNS: 'translations',
@@ -24,7 +26,7 @@ i18n
             loadPath: 'locales/{{lng}}/{{ns}}.json'
         },
 
-        debug: true,
+        debug: false,
 
         interpolation: {
             escapeValue: false, // not needed for react!!
