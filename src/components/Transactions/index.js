@@ -12,6 +12,8 @@ import Empty from '../../common/Empty';
 import Button from 'material-ui/Button';
 import FullHeight from '../../common/FullHeight';
 import _ from 'lodash';
+import {bindActionCreators} from "redux";
+import {actions as appuiActions} from "../../ducks/appui";
 
 const styles = theme => ({
 });
@@ -28,6 +30,10 @@ class Transactions extends React.Component {
             showSelectedTransaction: true,
             selectedTransaction: transaction
         })
+    }
+
+    viewAll = () => {
+        this.props.appuiActions.setWalletTab(3)
     }
 
     render() {
@@ -51,7 +57,7 @@ class Transactions extends React.Component {
                 </List>}
 
 
-                {limit && nimiq.selectedWallet.transactions.length > 5 && <Button>View All</Button>}
+                {limit && nimiq.selectedWallet.transactions.length > 5 && <Button onClick={this.viewAll}>View All</Button>}
 
                 <TransactionModal open={this.state.showSelectedTransaction} transaction={this.state.selectedTransaction}/>
 
@@ -66,8 +72,15 @@ Transactions.propTypes = {
 
 function mapStateToProps(state) {
     return {
-        nimiq: state.nimiq
+        nimiq: state.nimiq,
+        appui: state.appui
     };
 }
 
-export default connect(mapStateToProps)(withStyles(styles)(Transactions));
+function mapPropsToDispatch(dispatch) {
+    return {
+        appuiActions: bindActionCreators(appuiActions, dispatch)
+    };
+}
+
+export default connect(mapStateToProps, mapPropsToDispatch)(withStyles(styles)(Transactions));

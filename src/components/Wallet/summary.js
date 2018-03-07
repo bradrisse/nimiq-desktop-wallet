@@ -5,6 +5,7 @@ import Card, { CardContent } from 'material-ui/Card';
 import Typography from 'material-ui/Typography';
 import {connect} from "react-redux";
 import Transactions from '../Transactions';
+import FullHeight from '../../common/FullHeight';
 
 const styles = theme => ({
     card: {

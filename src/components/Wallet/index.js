@@ -15,6 +15,9 @@ import Transactions from '../Transactions';
 import Paper from 'material-ui/Paper';
 import FullHeight from '../../common/FullHeight';
 import { compose } from 'recompose';
+import {connect} from "react-redux";
+import {bindActionCreators} from "redux";
+import {actions as appuiActions} from "../../ducks/appui";
 
 import SummaryIcon from 'material-ui-icons/Assessment';
 import SendIcon from 'material-ui-icons/FileUpload';
@@ -48,17 +51,15 @@ const styles = theme => ({
 });
 
 class Wallet extends React.Component {
-    state = {
-        value: 0,
-    };
+
 
     handleChange = (event, value) => {
-        this.setState({ value });
+        this.props.appuiActions.setWalletTab(value)
     };
 
     render() {
-        const { classes, t } = this.props;
-        const { value } = this.state;
+        const { classes, t, appui } = this.props;
+
 
         return (
             <div className={classes.root}>
@@ -70,7 +71,7 @@ class Wallet extends React.Component {
                         <FullHeight>
                             <Paper className={classes.paper}>
                                 <AppBar position="static">
-                                    <Tabs value={value} onChange={this.handleChange} fullWidth>
+                                    <Tabs value={appui.walletTab} onChange={this.handleChange} fullWidth>
                                         <Tab icon={<SummaryIcon />} label={t('wallet.summary.title')} />
                                         <Tab icon={<SendIcon />} label={t('wallet.send.title')} />
                                         <Tab icon={<ReceiveIcon />} label={t('wallet.receive.title')} />
@@ -78,11 +79,11 @@ class Wallet extends React.Component {
                                         <Tab icon={<SettingsIcon />} label={t('wallet.settings.title')} />
                                     </Tabs>
                                 </AppBar>
-                                {value === 0 && <TabContainer><Summary/></TabContainer>}
-                                {value === 1 && <TabContainer><Send /></TabContainer>}
-                                {value === 2 && <TabContainer><Receive /></TabContainer>}
-                                {value === 3 && <TabContainer><Transactions subtract={120}/></TabContainer>}
-                                {value === 4 && <TabContainer><Settings /></TabContainer>}
+                                {appui.walletTab === 0 && <TabContainer><Summary/></TabContainer>}
+                                {appui.walletTab === 1 && <TabContainer><Send /></TabContainer>}
+                                {appui.walletTab === 2 && <TabContainer><Receive /></TabContainer>}
+                                {appui.walletTab === 3 && <TabContainer><Transactions subtract={120}/></TabContainer>}
+                                {appui.walletTab === 4 && <TabContainer><Settings /></TabContainer>}
                             </Paper>
                         </FullHeight>
                     </Grid>
@@ -96,7 +97,20 @@ Wallet.propTypes = {
     classes: PropTypes.object.isRequired,
 };
 
+function mapStateToProps(state) {
+    return {
+        appui: state.appui
+    };
+}
+
+function mapPropsToDispatch(dispatch) {
+    return {
+        appuiActions: bindActionCreators(appuiActions, dispatch)
+    };
+}
+
 export default compose(
+    connect(mapStateToProps, mapPropsToDispatch),
     withStyles(styles),
     translate('translations')
 )(Wallet);
