@@ -22,7 +22,30 @@ class Transactions extends React.Component {
 
     state = {
         selectedTransaction: null,
-        showSelectedTransaction: false
+        showSelectedTransaction: false,
+        transactions: [],
+        loadingMore: false
+    }
+
+    componentWillMount() {
+        this.setTransactions(this.props.nimiq.selectedWallet.transactions)
+    }
+
+    componentWillReceiveProps(nextProps) {
+        this.setTransactions(nextProps.nimiq.selectedWallet.transactions)
+    }
+
+    setTransactions = (_transactions) => {
+        if (_transactions) {
+            this.setState({
+                transactions: this.sortTransactions(_transactions)
+            })
+        }
+    }
+
+    sortTransactions = (_transactions) => {
+        const {limit} = this.props;
+        return _.sortBy(_transactions, 'timestamp').slice(0, limit ? limit : 10)
     }
 
     viewTransaction = (transaction) => {
@@ -36,15 +59,36 @@ class Transactions extends React.Component {
         this.props.appuiActions.setWalletTab(3)
     }
 
+    loadMore = () => {
+    
+        if (!this.state.loadingMore) {
+            this.setState({
+                loadingMore: true
+            }, () => {
+    
+                var _visibleTransactions = this.state.transactions;
+                _.each(this.props.nimiq.selectedWallet.transactions.splice(_visibleTransactions.length, 10), (_transaction) => {
+                    _visibleTransactions.push(_transaction)
+                })
+
+                this.setState({
+                    loadingMore: false,
+                    transactions: _visibleTransactions
+                })
+            })
+        }
+    }
+
     render() {
         const { classes, nimiq, lt, limit, subtract } = this.props;
+        const {transactions, showSelectedTransaction, selectedTransaction} = this.state;
 
         return (
-            <FullHeight scroll subtract={subtract}>
-                {nimiq.selectedWallet && nimiq.selectedWallet.transactions.length <= 0 && <Empty message="transactions.emptyRecent" subtract={288}/>}
+            <FullHeight scroll subtract={subtract} bottomReached={this.loadMore}>
+                {nimiq.selectedWallet && transactions.length <= 0 && <Empty message="transactions.emptyRecent" subtract={288}/>}
 
-                {nimiq.selectedWallet && nimiq.selectedWallet.transactions.length > 0 && <List>
-                    {_.sortBy(nimiq.selectedWallet.transactions, 'timestamp').slice(0, limit ? limit : nimiq.selectedWallet.transactions.length).map((transaction, index) => (
+                {nimiq.selectedWallet && transactions.length > 0 && <List>
+                    {transactions.map((transaction, index) => (
                         <ListItem key={index} onClick={() => {this.viewTransaction(transaction)}} button>
                             <Avatar>
                                 {nimiq.selectedWallet.address === transaction.recipient && <ReceivingIcon />}
@@ -57,9 +101,9 @@ class Transactions extends React.Component {
                 </List>}
 
 
-                {limit && nimiq.selectedWallet.transactions.length > 5 && <Button onClick={this.viewAll}>View All</Button>}
+                {limit && transactions.length > 5 && <Button onClick={this.viewAll} variant="raised">View All</Button>}
 
-                <TransactionModal open={this.state.showSelectedTransaction} transaction={this.state.selectedTransaction}/>
+                <TransactionModal open={showSelectedTransaction} transaction={selectedTransaction}/>
 
             </FullHeight>
         );
