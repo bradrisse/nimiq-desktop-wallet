@@ -5,7 +5,6 @@ import Card, { CardContent } from 'material-ui/Card';
 import Typography from 'material-ui/Typography';
 import {connect} from "react-redux";
 import Transactions from '../Transactions';
-import FullHeight from '../../common/FullHeight';
 
 const styles = theme => ({
     card: {
@@ -40,9 +39,7 @@ class Summary extends React.Component {
                             </Typography>
                         </CardContent>
                     </Card>
-                    <FullHeight scroll subtract={270}>
-                    <Transactions />
-                    </FullHeight>
+                    <Transactions limit={5} subtract={270}/>
                 </div>}
             </div>
         );

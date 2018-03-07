@@ -81,7 +81,7 @@ class Wallet extends React.Component {
                                 {value === 0 && <TabContainer><Summary/></TabContainer>}
                                 {value === 1 && <TabContainer><Send /></TabContainer>}
                                 {value === 2 && <TabContainer><Receive /></TabContainer>}
-                                {value === 3 && <TabContainer><Transactions /></TabContainer>}
+                                {value === 3 && <TabContainer><Transactions subtract={120}/></TabContainer>}
                                 {value === 4 && <TabContainer><Settings /></TabContainer>}
                             </Paper>
                         </FullHeight>

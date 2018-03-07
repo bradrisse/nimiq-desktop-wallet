@@ -2,12 +2,15 @@ import React from 'react';
 import PropTypes from 'prop-types';
 import { withStyles } from 'material-ui/styles';
 import {connect} from "react-redux";
+import {Link} from 'react-router-dom';
 import List, { ListItem, ListItemText } from 'material-ui/List';
 import Avatar from 'material-ui/Avatar';
 import ReceivingIcon from 'material-ui-icons/FileDownload';
 import SendingIcon from 'material-ui-icons/FileUpload';
 import TransactionModal from '../Transactions/transactionModal';
 import Empty from '../../common/Empty';
+import Button from 'material-ui/Button';
+import FullHeight from '../../common/FullHeight';
 import _ from 'lodash';
 
 const styles = theme => ({
@@ -28,14 +31,14 @@ class Transactions extends React.Component {
     }
 
     render() {
-        const { classes, nimiq } = this.props;
+        const { classes, nimiq, lt, limit, subtract } = this.props;
 
         return (
-            <div>
+            <FullHeight scroll subtract={subtract}>
                 {nimiq.selectedWallet && nimiq.selectedWallet.transactions.length <= 0 && <Empty message="transactions.emptyRecent" subtract={288}/>}
 
                 {nimiq.selectedWallet && nimiq.selectedWallet.transactions.length > 0 && <List>
-                    {_.sortBy(nimiq.selectedWallet.transactions, 'timestamp').reverse().map((transaction, index) => (
+                    {_.sortBy(nimiq.selectedWallet.transactions, 'timestamp').slice(0, limit ? limit : nimiq.selectedWallet.transactions.length).map((transaction, index) => (
                         <ListItem key={index} onClick={() => {this.viewTransaction(transaction)}} button>
                             <Avatar>
                                 {nimiq.selectedWallet.address === transaction.recipient && <ReceivingIcon />}
@@ -47,9 +50,12 @@ class Transactions extends React.Component {
                     ))}
                 </List>}
 
+
+                {limit && nimiq.selectedWallet.transactions.length > 5 && <Button>View All</Button>}
+
                 <TransactionModal open={this.state.showSelectedTransaction} transaction={this.state.selectedTransaction}/>
 
-            </div>
+            </FullHeight>
         );
     }
 }
